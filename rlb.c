@@ -63,8 +63,8 @@ static void _read(const int fd, short event, void *c);
 static int  _lookup_oaddr(struct cfg *cfg, char *outb);
 static void _write(const int fd, short event, void *c);
 static void _client(const int s, short event, void *ev);
+static int  _cmdline(struct cfg *cfg, int ac, char *av[]);
 static void _check_server(struct cfg *cfg, struct server *s);
-static int  _cmdline(struct cfg *cfg, int argc, char *argv[]);
 static struct addrinfo * _get_addrinfo(struct cfg *cfg, char *h, char *p);
 static struct server * _get_server(struct cfg *cfg, struct connection *c);
 
@@ -73,13 +73,13 @@ int main(int argc, char *argv[]) {
   struct cfg cfg;
 
   if (_cmdline(&cfg, argc, argv) < 0) _usage();
+  memset(&ev, 0, sizeof(ev)); _gcfg = &cfg;
 
   if ( (cfg.fd = _server(&cfg)) < 0 || _options(&cfg) < 0) {
     if (cfg.fd == -1) fprintf(stderr, "server: %s\n", strerror(errno));
     _cleanup(&cfg); exit(-1);
   }
 
-  memset(&ev, 0, sizeof(ev)); _gcfg = &cfg;
   signal(SIGINT, _sig); signal(SIGTERM, _sig); signal(SIGQUIT, _sig);
 
   event_init();
@@ -243,8 +243,7 @@ _client(const int s, short event, void *config)
   if (_sockopt(c, 1) < 0) { close(c); return; }
 
   cn    = &cfg->conn[c];
-  cn->c = c;
-  cn->s = -1;
+  cn->c = c; cn->s = -1;
   cn->rlen = cn->rpos = (size_t) 0U;
   cn->wlen = cn->wpos = (size_t) 0U;
   cn->c_rev.ev_fd = cn->c_wev.ev_fd = -1;
@@ -309,12 +308,10 @@ _server(struct cfg *cfg)
 static int
 _options(struct cfg *cfg)
 {
-  int i = 0;
-  unsigned int l = sizeof(cfg->bufsize);
+  unsigned int i = 0, l = sizeof(cfg->bufsize);
 
   if (cfg->check == 0) cfg->check = _CHECK;
-  if (cfg->to.tv_sec <= 0) cfg->to.tv_sec = _TIMEOUT;   /* XXX Timeout handling */
-
+  if (cfg->to.tv_sec <= 0) cfg->to.tv_sec = _TIMEOUT;
   if (!cfg->bufsize) getsockopt(cfg->fd, SOL_SOCKET, SO_SNDBUF, &cfg->bufsize, &l);
   if (!cfg->bufsize) cfg->bufsize = _BUFSIZE;
 
@@ -337,8 +334,7 @@ _options(struct cfg *cfg)
     cfg->conn[i].cfg = cfg;
   }
 
-  if (listen(cfg->fd, SOMAXCONN) < 0) return -1;
-  return 0;
+  return listen(cfg->fd, SOMAXCONN);
 }
 
 static int
@@ -365,8 +361,7 @@ _lookup_oaddr(struct cfg *cfg, char *outb)
 {
   struct addrinfo *res = _get_addrinfo(cfg, outb, NULL);
   if (!res) return -1;
-  memcpy(&cfg->oaddr, res->ai_addr, res->ai_addrlen);
-  cfg->olen = res->ai_addrlen;
+  memcpy(&cfg->oaddr, res->ai_addr, (cfg->olen = res->ai_addrlen) );
   freeaddrinfo(res);
   return 0;
 }
@@ -375,7 +370,7 @@ struct addrinfo *
 _get_addrinfo(struct cfg *cfg, char *h, char *p)
 {
   struct addrinfo hints, *res = NULL;
-  int rv;
+  int r;
 
   memset(&hints, 0, sizeof(hints));
   hints.ai_flags    = AI_PASSIVE;
@@ -383,8 +378,8 @@ _get_addrinfo(struct cfg *cfg, char *h, char *p)
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_protocol = 0;
 
-  if ( (rv = getaddrinfo(*h ? h : NULL, p, &hints, &res)) ) { 
-    fprintf(stderr, "%s - %s\n", *h ? h : "", gai_strerror(rv)); 
+  if ( (r = getaddrinfo(*h ? h : NULL, p, &hints, &res)) ) { 
+    fprintf(stderr, "%s - %s\n", *h ? h : "", gai_strerror(r)); 
     if (res) freeaddrinfo(res);
     return NULL; 
   }
@@ -392,26 +387,23 @@ _get_addrinfo(struct cfg *cfg, char *h, char *p)
 }
 
 static int
-_cmdline(struct cfg *cfg, int argc, char *argv[])
+_cmdline(struct cfg *cfg, int ac, char *av[])
 {
   int i, j;
   memset(cfg, 0, sizeof(struct cfg)); cfg->daemon = 1;
-  for (i = j = 1; i < argc; j = ++i) {
-    if (argv[i][0] != '-') return -1;
-    if ( (argv[j][1] != 'f' && argv[j][1] != 'v' && argv[j][1] != 'd') && 
-          ++i >= argc) return -1;
-
-    switch (argv[j][1]) {
-      case 'f': cfg->daemon     = 0;                              break;
-      case 'c': cfg->check      = atoi(argv[i]);                  break;
-      case 'm': cfg->max        = atoi(argv[i]);                  break;
-      case 'n': cfg->num        = atoi(argv[i]);                  break;
-      case 's': cfg->bufsize    = atoi(argv[i]);                  break;
-      case 't': cfg->to.tv_sec  = atoi(argv[i]);                  break;
-      case 'h': if (_parse_server(cfg, argv[i]) < 0) return -1;   break;
-      case 'B': if (_lookup_oaddr(cfg, argv[i]) < 0) return -1;   break;
-      case 'b': snprintf(cfg->host, sizeof(cfg->host), argv[i]);  break;
-      case 'p': snprintf(cfg->port, sizeof(cfg->port), argv[i]);  break;
+  for (i = j = 1; i < ac; j = ++i) {
+    if (av[j][0] != '-' || (av[j][1] != 'f' && ++i >= ac)) return -1;
+    switch (av[j][1]) {
+      case 'f': cfg->daemon     = 0;                            break;
+      case 'c': cfg->check      = atoi(av[i]);                  break;
+      case 'm': cfg->max        = atoi(av[i]);                  break;
+      case 'n': cfg->num        = atoi(av[i]);                  break;
+      case 's': cfg->bufsize    = atoi(av[i]);                  break;
+      case 't': cfg->to.tv_sec  = atoi(av[i]);                  break;
+      case 'h': if (_parse_server(cfg, av[i]) < 0) return -1;   break;
+      case 'B': if (_lookup_oaddr(cfg, av[i]) < 0) return -1;   break;
+      case 'b': snprintf(cfg->host, sizeof(cfg->host), av[i]);  break;
+      case 'p': snprintf(cfg->port, sizeof(cfg->port), av[i]);  break;
       default : return -1;
     }
   }
@@ -423,6 +415,6 @@ static void
 _usage(void)
 {
   fprintf(stderr, "\nrlb %s Copyright © 2006 RIVERDRUMS\n\n", _VERSION);
-  fprintf(stderr, "usage: rlb [-b host] -p port [-B addr] -h host:port[:max]... [-m max] [-t secs] [-c secs] [-s size] [-n num] [-f]\n");
+  fprintf(stderr, "usage: rlb -p port [-b addr] [-B addr] -h host:port[:max]... [-m max] [-t secs] [-c secs] [-s size] [-n num] [-f]\n");
   exit(-1);
 }
