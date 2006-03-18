@@ -1,0 +1,111 @@
+$Id$
+
+RLB v0.4  Jason Armstrong <ja@riverdrums.com>
+Copyright (c) 2006 Riverdrums
+http://rlb.sourceforge.net
+
+LICENSE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+
+
+PREFACE
+
+RLB is a no-frills load balancer, aimed at clarity and efficiency.
+
+
+REQUIREMENTS
+
+This program requires the libevent library by Niels Provos, available from:
+  http://www.monkey.org/~provos/libevent/
+
+
+COMPILING
+
+1. Install libevent
+2. gcc -Wall -O2 -o rlb rlb.c -levent
+Solaris:
+  a) cc -Wall -O2 -o rlb rlb.c -lnsl -lsocket -levent
+
+
+USAGE
+
+$ rlb -p port [-b addr] [-B addr] -h host:service[:max] [-h host:service[:max] ...] [-m max] [-t timeout] [-c check interval] [-s bufsize] [-n servers] [-f]
+
+
+OPTIONS
+
+  -p  port  Listen on this port
+  -b  addr  Bind to this interface when listening
+  -B  addr  Bind to this interface when connecting to backend servers
+  -h  host:service[:max]
+            Specify a backend server and service. The 'max' parameter, if
+            specified, is the maximum number of simultaneous connections
+            allowed to that server.
+            Service can be a port number (80) or service name (www).
+            This option can be specified multiple times.
+  -m  max   Maximum number of accepted connections to the load balancer. The
+            default is to use the system limit (RLIMIT_NOFILE). The minimum
+            value for this field is enforced to 8. Note that since this is a
+            file descriptor limit, each connection uses two descriptors, one
+            for the client and one to the backend server.
+  -t  secs  Timeout value in seconds for read/write operations on sockets. The
+            default value is 30 seconds.
+  -c  secs  Time in seconds after which a server that is not active is checked.
+            The default value is 60 seconds. 
+  -s  size  Read and write buffer size. The program allocates these at startup.
+            The default value is taken from the socket option SO_SNDBUF, which
+            may be too large (it is 16384 on my machine).
+  -n  num   Number of processes to start. All processes will listen on the same
+            port. Set to the number of CPUs.
+  -f        Run in the foreground (cancels the -n option)
+
+
+NOTE ON MEMORY USAGE
+
+The default behaviour is to take the maximum file descriptor that can be opened
+by the process, and for each of these 'connection' data structures, to allocate
+SO_SNDBUF size for two char arrays (read and write). This will result in the
+program allocating > 32 Mb of memory. If this is an issue, then you need to
+either reduce the maximum number of connections (via the -m max flag) or the
+size of the allocated buffers (via the -s size flag), or both.
+
+
+TODO
+
+1. Client tracking
+2. Content filtering based on shared modules
+3. Server selection algorithms
+
+
+CREDITS
+
+Niels Provos for the great libevent library. 
+I have studied a few other load balancers, including:
+ - PLB by Frank Denis         http://plb.sunsite.dk/
+ - Pen by Ulric Eriksson      http://siag.nu/pen/
+ - Balance by Thomas Obermair http://balance.sourceforge.net
+
+
+AUTHOR
+
+Jason Armstrong <ja@riverdrums.com>
+
+
+LINKS
+
+http://rlb.sourceforge.net
+
+
