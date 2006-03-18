@@ -1,4 +1,9 @@
-/* rlb.c © RIVERDRUMS 2006 $Id$ */
+/* 
+ * rlb.c Jason Armstrong <ja@riverdrums.com> © 2006 RIVERDRUMS
+ * $ gcc -Wall -02 -o rlb rlb.c -levent (-lnsl -lsocket) 
+ * $Id$ 
+ */
+
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -35,35 +40,33 @@ struct connection {
 };
 
 struct cfg {
-  int bufsize, si, cs, num, daemon, fd, check, max, ci;
+  int bufsize, si, cs, num, daemon, fd, check, max;
   struct connection *conn;
   struct server *servers;
-  struct client *clients;
   struct timeval to;
   char host[64], port[8];
   struct sockaddr oaddr;
   size_t olen;
 };
 
-static struct server * _get_server(struct cfg *cfg, struct connection *c);
-struct addrinfo * _get_addrinfo(struct cfg *cfg, char *h, char *p);
-static int  _cmdline(struct cfg *cfg, int argc, char *argv[]);
-static void _check_server(struct cfg *cfg, struct server *s);
-static void _client(const int s, short event, void *ev);
-static void _write(const int fd, short event, void *c);
-static int  _lookup_oaddr(struct cfg *cfg, char *outb);
-static void _read(const int fd, short event, void *c);
-static int  _parse_server(struct cfg *cfg, char *str);
-static int  _connect_server(struct connection *c);
-static int  _sockopt(const int fd, int nb);
-static void _close(struct connection *c);
+struct cfg *_gcfg = NULL;
+static void _usage(void);
+static void _sig(int signo);
+static int  _server(struct cfg *cfg);
 static void _cleanup(struct cfg *cfg);
 static int  _options(struct cfg *cfg);
-static int  _server(struct cfg *cfg);
-static void _sig(int signo);
-static void _version(void);
-static void _usage(void);
-struct cfg *_gcfg = NULL;
+static void _close(struct connection *c);
+static int  _sockopt(const int fd, int nb);
+static int  _connect_server(struct connection *c);
+static int  _parse_server(struct cfg *cfg, char *str);
+static void _read(const int fd, short event, void *c);
+static int  _lookup_oaddr(struct cfg *cfg, char *outb);
+static void _write(const int fd, short event, void *c);
+static void _client(const int s, short event, void *ev);
+static void _check_server(struct cfg *cfg, struct server *s);
+static int  _cmdline(struct cfg *cfg, int argc, char *argv[]);
+static struct addrinfo * _get_addrinfo(struct cfg *cfg, char *h, char *p);
+static struct server * _get_server(struct cfg *cfg, struct connection *c);
 
 int main(int argc, char *argv[]) {
   struct event ev;
@@ -95,6 +98,7 @@ static void
 _cleanup(struct cfg *cfg)
 {
   int i;
+  if (cfg->fd >= 0) { shutdown(cfg->fd, 2); close(cfg->fd); }
   for (i = 0; i < cfg->max; i++) {
     _close(&cfg->conn[i]);
     if (cfg->conn[i].rb) free(cfg->conn[i].rb); 
@@ -158,8 +162,8 @@ _write(const int fd, short event, void *c)
 static void
 _close(struct connection *c)
 {
-  c->rlen = c->rpos = c->wlen = c->wpos = 0;
   if (c->server) c->server->num--;
+  c->rlen = c->rpos = c->wlen = c->wpos = 0;
   if (EVENT_FD((&c->c_rev)) >= 0) { event_del(&c->c_rev); c->c_rev.ev_fd = -1; }
   if (EVENT_FD((&c->c_wev)) >= 0) { event_del(&c->c_wev); c->c_wev.ev_fd = -1; }
   if (EVENT_FD((&c->s_rev)) >= 0) { event_del(&c->s_rev); c->s_rev.ev_fd = -1; }
@@ -282,8 +286,10 @@ _server(struct cfg *cfg)
   struct addrinfo *ai;
 
   getrlimit(RLIMIT_NOFILE, &rl);
-  cfg->max = rl.rlim_cur = rl.rlim_max;
+  rl.rlim_cur = rl.rlim_max;
   setrlimit(RLIMIT_NOFILE, &rl);
+  if (cfg->max == 0) cfg->max = rl.rlim_cur;
+  else if (cfg->max < 8) cfg->max = 8;
 
   if ( !(cfg->conn = calloc(cfg->max, sizeof(struct connection))) ) return -1;
   for (i = 3; i < cfg->max; i++) close(i);
@@ -331,7 +337,7 @@ _options(struct cfg *cfg)
     cfg->conn[i].cfg = cfg;
   }
 
-  if (listen(cfg->fd, SOMAXCONN) < 0) { close(cfg->fd); return -1; }
+  if (listen(cfg->fd, SOMAXCONN) < 0) return -1;
   return 0;
 }
 
@@ -396,9 +402,9 @@ _cmdline(struct cfg *cfg, int argc, char *argv[])
           ++i >= argc) return -1;
 
     switch (argv[j][1]) {
-      case 'v': _version();                                       break;
       case 'f': cfg->daemon     = 0;                              break;
       case 'c': cfg->check      = atoi(argv[i]);                  break;
+      case 'm': cfg->max        = atoi(argv[i]);                  break;
       case 'n': cfg->num        = atoi(argv[i]);                  break;
       case 's': cfg->bufsize    = atoi(argv[i]);                  break;
       case 't': cfg->to.tv_sec  = atoi(argv[i]);                  break;
@@ -416,14 +422,7 @@ _cmdline(struct cfg *cfg, int argc, char *argv[])
 static void
 _usage(void)
 {
-  fprintf(stderr, "\nrlb %s\nCopyright © 2006 RIVERDRUMS\n\n", _VERSION);
-  fprintf(stderr, "usage: rlb [-b host] -p port [-B addr] -h host:port[:max]... [-t secs] [-c secs] [-s size] [-n num] [-f]\n");
+  fprintf(stderr, "\nrlb %s Copyright © 2006 RIVERDRUMS\n\n", _VERSION);
+  fprintf(stderr, "usage: rlb [-b host] -p port [-B addr] -h host:port[:max]... [-m max] [-t secs] [-c secs] [-s size] [-n num] [-f]\n");
   exit(-1);
-}
-
-static void
-_version(void)
-{
-  printf("rlb-%s by Jason Armstrong <ja@riverdrums.com>\n", _VERSION);
-  exit(0);
 }
