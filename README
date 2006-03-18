@@ -75,12 +75,13 @@ OPTIONS
 
 NOTE ON MEMORY USAGE
 
-The default behaviour is to take the maximum file descriptor that can be opened
-by the process, and for each of these 'connection' data structures, to allocate
-SO_SNDBUF size for two char arrays (read and write). This will result in the
-program allocating > 32 Mb of memory. If this is an issue, then you need to
-either reduce the maximum number of connections (via the -m max flag) or the
-size of the allocated buffers (via the -s size flag), or both.
+The default behaviour is to take the maximum number of file descriptors that
+can be opened by the process, and for each of these 'connection' data
+structures, to allocate SO_SNDBUF size for two char arrays (read and write).
+This will result in the program allocating > 32 Mb of memory. If this is an
+issue, then you need to either reduce the maximum number of connections (via
+the -m max flag) or the size of the allocated buffers (via the -s size flag),
+or both.
 
 
 TODO
@@ -93,7 +94,7 @@ TODO
 CREDITS
 
 Niels Provos for the great libevent library. 
-I have studied a few other load balancers, including:
+I have looked at a few other load balancers, including:
  - PLB by Frank Denis         http://plb.sunsite.dk/
  - Pen by Ulric Eriksson      http://siag.nu/pen/
  - Balance by Thomas Obermair http://balance.sourceforge.net
