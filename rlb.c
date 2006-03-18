@@ -75,6 +75,8 @@ int main(int argc, char *argv[]) {
   if (_cmdline(&cfg, argc, argv) < 0) _usage();
   memset(&ev, 0, sizeof(ev)); _gcfg = &cfg;
 
+  signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN);
+
   if ( (cfg.fd = _server(&cfg)) < 0 || _options(&cfg) < 0) {
     if (cfg.fd == -1) fprintf(stderr, "server: %s\n", strerror(errno));
     _cleanup(&cfg); exit(-1);
@@ -123,7 +125,7 @@ _read(const int fd, short event, void *c)
   if (event & EV_TIMEOUT) return _close(cn);
   if (cn->c == fd) { l = &cn->rlen; b = cn->rb; e = &cn->s_wev; o = cn->s; }
   if (cn->s == fd) { l = &cn->wlen; b = cn->wb; e = &cn->c_wev; o = cn->c; }
-  do { r = recv(fd, b + *l, bs - *l, 0); } while (r == -1 && errno == EINTR);
+  do { r = read(fd, b + *l, bs - *l); } while (r == -1 && errno == EINTR);
   if (r <= 0) { if (r < 0 && !*l && cn->s == fd) cn->server->status = 0; return _close(cn); }
   *l += r;
   event_set(e, o, EV_WRITE, _write, cn);
@@ -145,7 +147,7 @@ _write(const int fd, short event, void *c)
   if (cn->s == fd) { l = &cn->rlen; b = cn->rb; e = &cn->c_rev; e2 = &cn->s_wev; o = cn->c; p = &cn->rpos; }
 
   if (*l > 0) {
-    do { r = send(fd, b + *p, *l - *p, MSG_NOSIGNAL); } while (r == -1 && errno == EINTR);
+    do { r = write(fd, b + *p, *l - *p); } while (r == -1 && errno == EINTR);
     if (r != *l - *p) {
       if (r <= 0) return _close(cn);
       *p += r;
