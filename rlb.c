@@ -21,9 +21,16 @@
 #define _TIMEOUT  30
 #define _CHECK    60
 #define _BUFSIZE  4096
+#define _CLIENTS  2048
+
+struct client {
+  unsigned int id;
+  int server;
+  time_t last;
+};
 
 struct server {
-  int weight, status, num, max;
+  int weight, status, num, max, id;
   struct addrinfo *ai;
   time_t last;
 };
@@ -34,13 +41,15 @@ struct connection {
   size_t rlen, rpos, wlen, wpos;
   struct event c_rev, c_wev, s_rev, s_wev;
   struct server *server;
+  struct client *client;
   struct cfg *cfg;
 };
 
 struct cfg {
-  int bufsize, si, cs, num, daemon, fd, check, max;
+  int bufsize, si, cs, num, daemon, fd, check, max, ci, rr, stubborn;
   struct connection *conn;
   struct server *servers;
+  struct client *clients;
   struct timeval to;
   char host[64], port[8];
   struct sockaddr oaddr;
@@ -63,6 +72,7 @@ static void _write(const int fd, short event, void *c);
 static void _client(const int s, short event, void *ev);
 static int  _cmdline(struct cfg *cfg, int ac, char *av[]);
 static void _check_server(struct cfg *cfg, struct server *s);
+static struct client * _find_client(struct cfg *cfg, unsigned int addr);
 static int  _socket(struct cfg *cfg, struct addrinfo *a, int nb, int o);
 static struct addrinfo * _get_addrinfo(struct cfg *cfg, char *h, char *p);
 static struct server * _get_server(struct cfg *cfg, struct connection *c);
@@ -171,14 +181,23 @@ _close(struct connection *c)
   if (EVENT_FD((&c->s_wev)) >= 0) { event_del(&c->s_wev); c->s_wev.ev_fd = -1; }
   if (c->s >= 0) { shutdown(c->s, 2); close(c->s); c->s = -1; }
   if (c->c >= 0) { shutdown(c->c, 2); close(c->c); c->c = -1; }
+  if (c->client) { c->client->last = time(NULL); c->client = NULL; }
 }
 
 static struct server *
 _get_server(struct cfg *cfg, struct connection *c)
 {
   struct server *s = NULL;
-  int i = cfg->cs;
+  int i = cfg->cs, j;
   time_t now = 0;
+  if (!cfg->rr && (j = c->client->server) >= 0) { 
+    s = &cfg->servers[j]; 
+    if (s->status && (s->max ? s->num + 1 <= s->max : 1)) return s; 
+    if (cfg->stubborn) {
+      if (!s->status && time(NULL) - s->last >= cfg->check) { _check_server(cfg, s); if (s->status) return s; }
+      return NULL;
+    }
+  }
   do {
     cfg->cs %= cfg->si;
     s = &cfg->servers[cfg->cs];
@@ -205,7 +224,8 @@ _connect_server(struct connection *c)
     if (r < 0 && errno != EINPROGRESS) { c->server->status = 0; close(fd); continue; }
     break;
   }
-  if (!c->server || fd < 0) return -1;
+  if (!c->server || (!cfg->rr && !c->client) || fd < 0) return -1;
+  if (!cfg->rr && c->client->server < 0) { c->client->server = c->server->id; c->client->last = time(NULL); }
 
   c->s = fd; c->server->num++;
   event_set(&c->s_rev, fd, EV_READ, _read, c);
@@ -230,6 +250,7 @@ _client(const int s, short event, void *config)
 {
   int c;
   struct sockaddr sa;
+  struct sockaddr_in *si;
   socklen_t l = sizeof(sa);
   struct cfg *cfg = config;
   struct connection *cn = NULL;
@@ -245,9 +266,30 @@ _client(const int s, short event, void *config)
   cn->c_rev.ev_fd = cn->c_wev.ev_fd = -1;
   cn->s_rev.ev_fd = cn->s_wev.ev_fd = -1;
 
+  if (!cfg->rr) {
+    si = (struct sockaddr_in *) &sa;
+    cn->client = _find_client(cfg, si->sin_addr.s_addr);
+  }
+
   if (_connect_server(cn) < 0) return _close(cn);
   event_set(&cn->c_rev, cn->c, EV_READ, _read, cn);
   event_add(&cn->c_rev, &cfg->to);
+}
+
+static struct client *
+_find_client(struct cfg *cfg, unsigned int addr)
+{
+  int i, j = 0;
+  struct client *cl;
+  time_t oldest = 0;
+  for (i = 0; i < cfg->ci; i++) {
+    cl = &cfg->clients[i];
+    if (cl->id == 0) { cl->id = addr; cl->server = -1; return cl; }
+    if (cl->id == addr) return cl;
+    if (!oldest || cl->last < oldest) { oldest = cl->last; j = i; }
+  }
+  cl = &cfg->clients[j]; cl->id = addr; cl->server = -1;
+  return cl;
 }
 
 static int
@@ -282,6 +324,8 @@ _options(struct cfg *cfg)
   if (cfg->to.tv_sec <= 0) cfg->to.tv_sec = _TIMEOUT;
   if (!cfg->bufsize) getsockopt(cfg->fd, SOL_SOCKET, SO_SNDBUF, &cfg->bufsize, &l);
   if (!cfg->bufsize) cfg->bufsize = _BUFSIZE;
+  if (!cfg->ci) cfg->ci = _CLIENTS;
+  if (!(cfg->clients = calloc(cfg->ci, sizeof(struct client))) ) return -1;
 
   if (cfg->daemon) {
     close(0); close(1); close(2);
@@ -317,7 +361,7 @@ _parse_server(struct cfg *cfg, char *str)
 
   if ( !(sv = realloc(cfg->servers, (cfg->si + 1) * sizeof(struct server))) ) return -1;
   cfg->servers = sv; s = &sv[cfg->si]; memset(s, 0, sizeof(struct server));
-  if ( !(s->ai = _get_addrinfo(cfg, str, cp + 1)) ) return -1; cfg->si++;
+  if ( !(s->ai = _get_addrinfo(cfg, str, cp + 1)) ) return -1; s->id = cfg->si++;
 
   if (p) { *p++ = ':'; if (*p) s->max = atoi(p); } *cp = ':';
   _check_server(cfg, s);
@@ -394,12 +438,16 @@ _cmdline(struct cfg *cfg, int ac, char *av[])
   int i, j;
   memset(cfg, 0, sizeof(struct cfg)); cfg->daemon = 1;
   for (i = j = 1; i < ac; j = ++i) {
-    if (av[j][0] != '-' || (av[j][1] != 'f' && ++i >= ac)) return -1;
+    if (av[j][0] != '-' || (av[j][1] != 'f' && av[j][1] != 'r' && 
+                            av[j][1] != 'u' && ++i >= ac)) return -1;
     switch (av[j][1]) {
+      case 'u': cfg->stubborn   = 1;                            break;
       case 'f': cfg->daemon     = 0;                            break;
-      case 'c': cfg->check      = atoi(av[i]);                  break;
+      case 'r': cfg->rr         = 1;                            break;
+      case 'l': cfg->ci         = atoi(av[i]);                  break;
       case 'm': cfg->max        = atoi(av[i]);                  break;
       case 'n': cfg->num        = atoi(av[i]);                  break;
+      case 'c': cfg->check      = atoi(av[i]);                  break;
       case 's': cfg->bufsize    = atoi(av[i]);                  break;
       case 't': cfg->to.tv_sec  = atoi(av[i]);                  break;
       case 'h': if (_parse_server(cfg, av[i]) < 0) return -1;   break;
@@ -417,6 +465,6 @@ static void
 _usage(void)
 {
   fprintf(stderr, "\nrlb %s Copyright © 2006 RIVERDRUMS\n\n", _VERSION);
-  fprintf(stderr, "usage: rlb -p port [-b addr] [-B addr] -h host:port[:max]... [-m max] [-t secs] [-c secs] [-s size] [-n num] [-f]\n");
+  fprintf(stderr, "usage: rlb -p port [-b addr] [-B addr] -h host:port[:max]... [-m max] [-t secs] [-c secs] [-s size] [-n num] [-l clients] [-r] [-u] [-f]\n");
   exit(-1);
 }
