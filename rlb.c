@@ -1,8 +1,6 @@
-/* 
- * rlb.c Jason Armstrong <ja@riverdrums.com> © 2006 RIVERDRUMS
+/* rlb.c Jason Armstrong <ja@riverdrums.com> © 2006 RIVERDRUMS
  * $ gcc -Wall -02 -o rlb rlb.c -levent (-lnsl -lsocket) 
- * $Id$ 
- */
+ * $Id$ */
 
 #include <time.h>
 #include <errno.h>
@@ -65,6 +63,7 @@ static void _write(const int fd, short event, void *c);
 static void _client(const int s, short event, void *ev);
 static int  _cmdline(struct cfg *cfg, int ac, char *av[]);
 static void _check_server(struct cfg *cfg, struct server *s);
+static int  _socket(struct cfg *cfg, struct addrinfo *a, int nb, int o);
 static struct addrinfo * _get_addrinfo(struct cfg *cfg, char *h, char *p);
 static struct server * _get_server(struct cfg *cfg, struct connection *c);
 
@@ -201,10 +200,7 @@ _connect_server(struct connection *c)
   int fd = -1, r;
 
   while ( (c->server = _get_server(cfg, c)) ) {
-    if ( !(a = c->server->ai) ) return -1;
-    if ( (fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol)) < 0) return -1;
-    if (_sockopt(fd, 1) < 0) { close(fd); return -1; }
-    if (cfg->olen) if (bind(fd, &cfg->oaddr, cfg->olen) < 0) { close(fd); return -1; }
+    if ( (fd = _socket(cfg, (a = c->server->ai), 0, 1)) < 0) return -1;
     do { r = connect(fd, a->ai_addr, a->ai_addrlen); } while (r == -1 && errno == EINTR);
     if (r < 0 && errno != EINPROGRESS) { c->server->status = 0; close(fd); continue; }
     break;
@@ -222,9 +218,7 @@ _check_server(struct cfg *cfg, struct server *s)
 {
   int fd, r;
   struct addrinfo *a = s->ai;
-  if ( (fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol)) < 0) return;
-  if (_sockopt(fd, 0) < 0) { close(fd); return; }
-  if (cfg->olen) if (bind(fd, &cfg->oaddr, cfg->olen) < 0) { close(fd); return; }
+  if ( (fd = _socket(cfg, a, 0, 1)) < 0) return;
   do { r = connect(fd, a->ai_addr, a->ai_addrlen); } while (r == -1 && errno == EINTR);
   close(fd);
   if (!r) { s->status = 1; s->last = 0; s->num = 0; }
@@ -257,29 +251,6 @@ _client(const int s, short event, void *config)
 }
 
 static int
-_sockopt(const int fd, int nb)
-{
-  int ret = 0, on = 1;
-
-#ifdef SO_LINGER
-  {
-    struct linger l;
-    l.l_onoff = l.l_linger = 0;
-    ret |= setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof(l));
-  }
-#endif
-#ifdef SO_KEEPALIVE
-  ret |= setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
-#endif
-#ifdef SO_REUSEADDR
-  ret |= setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-#endif
-
-  if (nb) ret |= fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-  return ret;
-}
-
-static int
 _server(struct cfg *cfg)
 {
   int i, fd;
@@ -296,13 +267,8 @@ _server(struct cfg *cfg)
   for (i = 3; i < cfg->max; i++) close(i);
 
   if ( !(ai = _get_addrinfo(cfg, cfg->host, cfg->port))) return -2;
-  if ( (fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol)) < 0 ||
-        _sockopt(fd, 1) < 0 ||
-        bind(fd, ai->ai_addr, ai->ai_addrlen) < 0) {
-    if (fd >= 0) close(fd); freeaddrinfo(ai);
-    return -1;
-  }
-
+  fd = _socket(cfg, ai, 1, 0);
+  if (fd >= 0) if (bind(fd, ai->ai_addr, ai->ai_addrlen) < 0) { close(fd); fd = -1; }
   freeaddrinfo(ai);
   return fd;
 }
@@ -386,6 +352,40 @@ _get_addrinfo(struct cfg *cfg, char *h, char *p)
     return NULL; 
   }
   return res;
+}
+
+static int
+_socket(struct cfg *cfg, struct addrinfo *a, int nb, int o)
+{
+  int fd = -1;
+  if (cfg == NULL || a == NULL) return -1;
+  if ( (fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol)) < 0) return -1;
+  if (_sockopt(fd, nb) < 0) { close(fd); return -1; }
+  if (o && cfg->olen) if (bind(fd, &cfg->oaddr, cfg->olen) < 0) { close(fd); return -1; }
+  return fd;
+}
+
+static int
+_sockopt(const int fd, int nb)
+{
+  int ret = 0, on = 1;
+
+#ifdef SO_LINGER
+  {
+    struct linger l;
+    l.l_onoff = l.l_linger = 0;
+    ret |= setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof(l));
+  }
+#endif
+#ifdef SO_KEEPALIVE
+  ret |= setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+#endif
+#ifdef SO_REUSEADDR
+  ret |= setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+#endif
+
+  if (nb) ret |= fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+  return ret;
 }
 
 static int
