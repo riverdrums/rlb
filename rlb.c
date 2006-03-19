@@ -77,7 +77,7 @@ int main(int argc, char *argv[]) {
   signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN);
 
   if ( (cfg.fd = _server(&cfg)) < 0 || _options(&cfg) < 0) {
-    if (cfg.fd == -1) fprintf(stderr, "server: %s\n", strerror(errno));
+    if (cfg.fd == -1) fprintf(stderr, "rlb: %s\n", strerror(errno));
     _cleanup(&cfg); exit(-1);
   }
 
