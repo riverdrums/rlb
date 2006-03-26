@@ -1,6 +1,6 @@
 $Id$
 
-RLB v0.4  Jason Armstrong <ja@riverdrums.com>
+RLB v0.5  Jason Armstrong <ja@riverdrums.com>
 Copyright (c) 2006 Riverdrums
 http://rlb.sourceforge.net
 
@@ -39,10 +39,14 @@ COMPILING
 Solaris:
   a) cc -Wall -O2 -o rlb rlb.c -lnsl -lsocket -levent
 
+If you want to use the content filtering support:
+
+$ gcc -DRLB_SO -Wall -O2 -o rlb rlb.c -levent -ldl
+
 
 USAGE
 
-$ rlb -p port [-b addr] [-B addr] -h host:service[:max] [-h host:service[:max] ...] [-m max] [-t timeout] [-c check interval] [-s bufsize] [-n servers] [-f]
+$ rlb -p port [-b addr] [-B addr] -h host:service[:max] [-h host:service[:max] ...] [-m max] [-t timeout] [-c check interval] [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients] [-r] [-S] [-d] [-f] [-o shared object]
 
 
 OPTIONS
@@ -58,30 +62,67 @@ OPTIONS
             This option can be specified multiple times.
   -m  max   Maximum number of accepted connections to the load balancer. The
             default is to use the system limit (RLIMIT_NOFILE). The minimum
-            value for this field is enforced to 8. Note that since this is a
-            file descriptor limit, each connection uses two descriptors, one
-            for the client and one to the backend server.
+            value for this field is enforced to 8. This is a file
+            descriptor limit, and each connection uses two descriptors,
+            one for the client and one to the backend server.
   -t  secs  Timeout value in seconds for read/write operations on sockets. The
             default value is 30 seconds.
   -c  secs  Time in seconds after which a server that is not active is checked.
             The default value is 60 seconds. 
-  -s  size  Read and write buffer size. The program allocates these at startup.
-            The default value is taken from the socket option SO_SNDBUF, which
-            may be too large (it is 16384 on my machine).
+  -s  size  Buffer size. The program allocates this at startup.  The
+            default value is taken from the socket option SO_SNDBUF,
+            which may be too large (it is 16384 on my machine).
   -n  num   Number of processes to start. All processes will listen on the same
             port. Set to the number of CPUs.
+  -l  num   Number of clients to keep track of simultaneously. Oldest clients
+            are kicked out. This implements simple sessions, where the same IP
+            address will be sent back to the same server.
+  -S        Stubborn client. If the client connected to a certain server
+            previously and it is currently unavailable (or maxed out), then
+            don't try any other servers.
+  -r        Round robin. Don't retain client IP/server pairs.
+  -j  jail  Chroot to this directory on startup.
+  -u  user  Run as this user.
+  -d        Delayed connect. Only connect after the first read. This is for
+            use with content filters, which may want to select a server
+            to connect to based on the very first data that is read.
   -f        Run in the foreground (cancels the -n option)
+
+
+CLIENT TRACKING
+
+Client/server pairs are stored up to a configurable value (default is
+4096), after which the oldest is expired to make way for the new one.
+To disable this behaviour, and implement simple round-robin choice of
+servers, specify the -r command line option.
+
+If a client previously connected to a certain server, and that server is
+unavailable when the client connects again, then the default behaviour
+is to try the next available server in the cluster. This can be
+overriden with the -S flag, which tells the load balancer to be stubborn
+about previous client/server pairs. In this case, if the server is
+unavailable, the client will be disconnected (and won't be able to
+transact until it is expired from the client tracking array, or the
+server becomes available again).
+
+
+CONTENT FILTER API
+
+RLB provides an API via a shared object to user-defined content filters.
+For this to work, rlb must be compiled with RLB_SO defined (add -DRLB_SO
+to the make options).
+
 
 
 NOTE ON MEMORY USAGE
 
-The default behaviour is to take the maximum number of file descriptors that
-can be opened by the process, and for each of these 'connection' data
-structures, to allocate SO_SNDBUF size for two char arrays (read and write).
-This will result in the program allocating > 32 Mb of memory. If this is an
-issue, then you need to either reduce the maximum number of connections (via
-the -m max flag) or the size of the allocated buffers (via the -s size flag),
-or both.
+The default behaviour is to take the maximum number of file descriptors
+that can be opened by the process, and for each of these 'connection'
+data structures, to allocate SO_SNDBUF size a char array.  This will
+result in the program allocating > 16 Mb of memory. If this is an issue,
+then you need to either reduce the maximum number of connections (via
+the -m max flag) or the size of the allocated buffers (via the -s size
+flag), or both.
 
 
 TODO
@@ -89,6 +130,8 @@ TODO
 1. Client tracking
 2. Content filtering based on shared modules
 3. Server selection algorithms
+4. Reload
+5. Re-select server after first read error
 
 
 CREDITS
@@ -98,6 +141,12 @@ I have looked at a few other load balancers, including:
  - PLB by Frank Denis         http://plb.sunsite.dk/
  - Pen by Ulric Eriksson      http://siag.nu/pen/
  - Balance by Thomas Obermair http://balance.sourceforge.net
+ - Netcat
+
+
+FEEDBACK
+
+Feedback is welcome and appreciated. Please contact the author.
 
 
 AUTHOR
@@ -110,3 +159,4 @@ LINKS
 http://rlb.sourceforge.net
 
 
+# vim:tw=72:ts=2:si:ai:cin:fo=croqtln:is:ft=readme
