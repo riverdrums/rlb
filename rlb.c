@@ -145,6 +145,7 @@ _close(struct cfg *cfg, struct connection *c)
   if (EVENT_FD((&c->wev)) >= 0) { event_del(&c->wev); c->wev.ev_fd = -1; }
   c->len = c->pos = c->nr = c->nr = 0; 
   c->scope = RLB_NONE;
+  memset(&c->sa, 0, sizeof(c->sa));
   if (c->od >= 0) { 
     struct connection *cn = &cfg->conn[c->od]; c->od = -1;
     shutdown(cn->fd, 2); close(cn->fd);
@@ -155,6 +156,7 @@ _close(struct cfg *cfg, struct connection *c)
     if (EVENT_FD((&cn->wev)) >= 0) { event_del(&cn->wev); cn->wev.ev_fd = -1; }
     cn->len = cn->pos = cn->nr = cn->nr = 0; 
     cn->scope = RLB_NONE; 
+    memset(&cn->sa, 0, sizeof(cn->sa));
   }
 }
 
@@ -261,6 +263,7 @@ _client(const int s, short event, void *config)
   cn->len = cn->pos = (size_t) 0U;
   cn->rev.ev_fd = cn->wev.ev_fd = -1;
   cn->scope = RLB_CLIENT;
+  memcpy(&cn->sa, &sa, l);
 
   if (!cfg->rr) {
     si = (struct sockaddr_in *) &sa;
