@@ -35,13 +35,19 @@ This program requires the libevent library by Niels Provos, available from:
 COMPILING
 
 1. Install libevent
+
 2. gcc -Wall -O2 -o rlb rlb.c -levent
 Solaris:
   a) cc -Wall -O2 -o rlb rlb.c -lnsl -lsocket -levent
 
-If you want to use the content filtering support:
+  If you want to use the content filtering API:
+  $ gcc -DRLB_SO -Wall -O2 -o rlb rlb.c -levent -ldl
 
-$ gcc -DRLB_SO -Wall -O2 -o rlb rlb.c -levent -ldl
+  To compile your own filter from a filter.c source file:
+  $ gcc -DRLB_SO -Wall -O2 -I. -fPIC -shared -o filter.so filter.c
+
+  To use your own filter:
+  $ rlb -p 80 -h host1:80 -h host2:80 [other options] -o ./filter.so
 
 
 USAGE
@@ -68,7 +74,7 @@ OPTIONS
   -t  secs  Timeout value in seconds for read/write operations on sockets. The
             default value is 30 seconds.
   -c  secs  Time in seconds after which a server that is not active is checked.
-            The default value is 60 seconds. 
+            The default value is 30 seconds. 
   -s  size  Buffer size. The program allocates this at startup.  The
             default value is taken from the socket option SO_SNDBUF,
             which may be too large (it is 16384 on my machine).
@@ -76,7 +82,8 @@ OPTIONS
             port. Set to the number of CPUs.
   -l  num   Number of clients to keep track of simultaneously. Oldest clients
             are kicked out. This implements simple sessions, where the same IP
-            address will be sent back to the same server.
+            address will be sent back to the same server. Default is
+            4096.
   -S        Stubborn client. If the client connected to a certain server
             previously and it is currently unavailable (or maxed out), then
             don't try any other servers.
@@ -87,6 +94,7 @@ OPTIONS
             use with content filters, which may want to select a server
             to connect to based on the very first data that is read.
   -f        Run in the foreground (cancels the -n option)
+  -o  so    Load the specified shared object content filter.
 
 
 CLIENT TRACKING
@@ -112,6 +120,152 @@ RLB provides an API via a shared object to user-defined content filters.
 For this to work, rlb must be compiled with RLB_SO defined (add -DRLB_SO
 to the make options).
 
+Five API functions are defined. None are required, and they are only
+called if they are found in the shared object.
+
+An example http filter program is included. It rewrites 'Host' and
+'Referer' fields from the client to the backend server (probably not
+necessary), as well as rewriting 'Location' headers from the server to
+the client (quite useful). It also logs all requests so that a unified
+logfile can be accessed which will have the correct details of the
+client IP address (to backend servers, all requests come from the load
+balancer's IP address). You will need to modify a few variables at the
+top of the file to get it to work for your setup.
+
+1. int  rlb_init(struct cfg *);
+
+  This function is called on startup. It takes the configuration
+  structure as a parameter. It is called after everything has been
+  configured and setup, just before the call to listen(). If you return
+  less than 0 from this function, the program will exit.
+
+  If you want to set your own 'global' parameters, a variable
+  cfg->userdata is provided. You can store anything in it, it is defined
+  as 'void *'. For example, you could malloc() your own data structure
+  and point cfg->userdata to it. You should then provide rlb_cleanup()
+  with a method of freeing any resources you allocate. You can access
+  this data structure for the duration of the process in any of the
+  other API calls.
+
+  Example:
+
+int rlb_init(struct cfg *cfg) {
+  FILE *f = fopen("/tmp/rlb_filter.log", "a+");
+  if (f) cfg->userdata = (FILE *) f;
+  return 0;
+}
+
+
+2. void rlb_cleanup(struct cfg *);
+
+  This function is called (if defined) just before the process exits,
+  before the handle to the shared object is closed. You should generally
+  use it to de-allocate resources, and perform any other closing down
+  actions necessary.
+
+  Example:
+
+void rlb_cleanup(struct cfg *cfg) {
+  FILE *f = (FILE *) cfg->userdata;
+  if (f) fclose(f);
+}
+
+
+3. int  rlb_filter(struct connection *, int);
+
+  This is probably the most useful function. It is called after every
+  data read, in both directions. It is passed the connection data
+  structure, where the data buffer, positions and length can be
+  accessed, as well as an integer which represents the amount of data
+  read in the last call to read().
+
+  You can pretty much do what you like with the data, including
+  reallocating memory if you want to rewrite data in the data buffer.
+  But note that you have to be *very careful* about what you do here,
+  including re-calculating lengths and data positions, if you decide to
+  tamper with the data. If you find that rlb is giving segmentation
+  faults, the problem is probably here. Also note that the data buffer
+  can't be dealt with simply as a string, although when rlb starts it
+  allocates one more byte than the official length. You can therefore do
+  something like this:
+
+int rlb_filter(struct connection *c, int r) {
+  *(c->b + c->pos + c->len) = 0;
+}
+
+  And you are guaranteed that you won't be overrunning the end of the
+  buffer. If you reallocate the buffer yourself, though, and don't
+  allocate the extra byte, then all bets are off.
+
+  Some things to note:
+
+  a) All variables are incremented before this function is called.
+  b) The second parameter is only the number of bytes in the last call
+     to read(). 
+  c) To see if this is the very first read on a connection:
+     if (c->nr - r == 0) { /* First read */ }
+  d) You can distinguish between client and server connections by
+     examining the c->scope parameter:
+     if (c->scope == RLB_CLIENT) { /* Client specific */ }
+     if (c->scope == RLB_SERVER) { /* Server specific */ }
+  e) You have access to the global configuration structure via the
+     c->cfg variable.
+  f) The client and server are 'paired'. To get the other side of the
+     pair, you need to check the c->od variable, and then find the
+     corresponding connection structure:
+     if (c->od >= 0) {
+       struct cfg *cfg = c->cfg;
+       struct connection *other = &cfg->conn[c->od];
+     }
+  g) The buffer size is stored in the variable c->bs. If you reallocate
+     the data buffer (c->b), you need to reassign this variable too.
+  h) Total statistics for a connection are in the variables c->nr
+     (number of bytes read) and c->nw (bytes written).
+  i) The data that has just been read might not start at the beginning
+     of the data buffer. If you want to examine the latest read data,
+     you should always use c->b + c->pos. The data length will be c->len
+     bytes.
+  j) There is also a 'void *' userdata parameter in the connection
+     structure, that is persistent across a connection. It can be used
+     as a data container, and should be freed in the corresponding call
+     to rlb_close().
+
+4. void rlb_close(struct connection *);
+
+  Called for each connection when it is closed. It is called before any
+  of the other closing operations, such as shutting down the socket,
+  happen, so you still have access to all the variables, such as total
+  bytes read, written, information regarding the server that was
+  connected to, client connection data etc.
+
+5. void rlb_get_server(struct cfg *, struct connection *);
+
+  This function is meant as a user defined replacement for selecting
+  which server to direct a connection to. It is not complete as yet, and
+  shouldn't be relied on to stay in it's current format.
+
+  As it is, you can traverse the set of pre-defined servers via the
+  cfg->servers array, choose which one you want to use, and then set the
+  connection variable 'so_server' to that number.
+
+Example:
+
+void rlb_get_server(struct cfg *cfg, struct connection *c) {
+  int i;
+  for (i = 0; i < cfg->si; i++) {
+    struct server *s = &cfg->servers[i];
+    if (some criteria is fulfilled) {
+      c->so_server = i;
+      return;
+    }
+  }
+}
+
+  The so_server variable gets reset to -1 after every time it is used.
+
+  However, the plan is that this function should be able to set a server
+  independently of the servers loaded at startup, and that is on the
+  todo list.
 
 
 NOTE ON MEMORY USAGE
@@ -127,21 +281,25 @@ flag), or both.
 
 TODO
 
-1. Client tracking
-2. Content filtering based on shared modules
-3. Server selection algorithms
-4. Reload
-5. Re-select server after first read error
+1. Server selection algorithms
+2. Reload on the fly without losing any current connections
+3. Re-select server after first read error (non-blocking connect error)
+4. rlb_get_server() API interface
 
 
 CREDITS
 
 Niels Provos for the great libevent library. 
-I have looked at a few other load balancers, including:
+
+I have looked at a few other load balancers and related programs,
+including:
+
  - PLB by Frank Denis         http://plb.sunsite.dk/
  - Pen by Ulric Eriksson      http://siag.nu/pen/
  - Balance by Thomas Obermair http://balance.sourceforge.net
  - Netcat
+ - Pound
+ - proxy_load_balancer
 
 
 FEEDBACK

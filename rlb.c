@@ -25,13 +25,14 @@ static void _read(const int fd, short event, void *c);
 static int  _lookup_oaddr(struct cfg *cfg, char *outb);
 static void _write(const int fd, short event, void *c);
 static void _client(const int s, short event, void *ev);
+static void _reset(struct cfg *cfg, struct connection *c);
 static int  _cmdline(struct cfg *cfg, int ac, char *av[]);
 static void _close(struct cfg *cfg, struct connection *c);
 static void _check_server(struct cfg *cfg, struct server *s);
 static int  _socket(struct cfg *cfg, struct addrinfo *a, int nb, int o);
-static struct client * _find_client(struct cfg *cfg, unsigned int addr);
+static struct client *   _find_client(struct cfg *cfg, unsigned int addr);
 static struct addrinfo * _get_addrinfo(struct cfg *cfg, char *h, char *p);
-static struct server * _get_server(struct cfg *cfg, struct connection *c);
+static struct server *   _get_server(struct cfg *cfg, struct connection *c);
 
 int main(int argc, char *argv[]) {
   struct event ev;
@@ -56,14 +57,12 @@ int main(int argc, char *argv[]) {
   return event_dispatch();
 }
 
-static void
-_sig(int signo)
+static void _sig(int signo)
 {
   _cleanup(_gcfg); exit(0);
 }
 
-static void
-_cleanup(struct cfg *cfg)
+static void _cleanup(struct cfg *cfg)
 {
   int i;
   if (cfg->fd >= 0) { shutdown(cfg->fd, 2); close(cfg->fd); }
@@ -80,8 +79,7 @@ _cleanup(struct cfg *cfg)
 #endif
 }
 
-static void
-_read(const int fd, short event, void *c)
+static void _read(const int fd, short event, void *c)
 {
   struct connection *cn = c, *co = NULL;
   struct cfg *cfg = cn->cfg;
@@ -104,8 +102,7 @@ _read(const int fd, short event, void *c)
   event_add(&co->wev, &cfg->to);
 }
 
-static void
-_write(const int fd, short event, void *c)
+static void _write(const int fd, short event, void *c)
 {
   struct connection *cn = c, *co = NULL;
   struct cfg *cfg = cn->cfg;
@@ -131,13 +128,18 @@ _write(const int fd, short event, void *c)
   event_add(&co->rev, &cfg->to);
 }
 
-static void
-_close(struct cfg *cfg, struct connection *c)
+static void _close(struct cfg *cfg, struct connection *c)
+{
+  _reset(cfg, c);
+  if (c->od >= 0) { _reset(cfg, &cfg->conn[c->od]); cfg->conn[c->od].od = -1; }
+  c->od = -1;
+}
+
+static void _reset(struct cfg *cfg, struct connection *c)
 {
 #ifdef RLB_SO
   if (cfg->cl) cfg->cl(c);
 #endif
-
   if (c->fd >= 0) { shutdown(c->fd, 2); close(c->fd); c->fd = -1; }
   if (c->server) c->server->num--; c->server = NULL;
   if (c->client) c->client->last = time(NULL); c->client = NULL;
@@ -146,22 +148,9 @@ _close(struct cfg *cfg, struct connection *c)
   c->len = c->pos = c->nr = c->nr = 0; 
   c->scope = RLB_NONE;
   memset(&c->sa, 0, sizeof(c->sa));
-  if (c->od >= 0) { 
-    struct connection *cn = &cfg->conn[c->od]; c->od = -1;
-    shutdown(cn->fd, 2); close(cn->fd);
-    cn->od = cn->fd = -1;
-    if (cn->server) cn->server->num--; cn->server = NULL;
-    if (cn->client) cn->client->last = time(NULL); cn->client = NULL;
-    if (EVENT_FD((&cn->rev)) >= 0) { event_del(&cn->rev); cn->rev.ev_fd = -1; }
-    if (EVENT_FD((&cn->wev)) >= 0) { event_del(&cn->wev); cn->wev.ev_fd = -1; }
-    cn->len = cn->pos = cn->nr = cn->nr = 0; 
-    cn->scope = RLB_NONE; 
-    memset(&cn->sa, 0, sizeof(cn->sa));
-  }
 }
 
-static struct server *
-_get_server(struct cfg *cfg, struct connection *c)
+static struct server * _get_server(struct cfg *cfg, struct connection *c)
 {
   struct server *s = NULL;
   int i = cfg->cs, j;
@@ -204,8 +193,7 @@ _get_server(struct cfg *cfg, struct connection *c)
   return s;
 }
  
-static int
-_connect_server(struct connection *c)
+static int _connect_server(struct connection *c)
 {
   struct cfg *cfg = c->cfg;
   struct connection *cn = NULL;
@@ -233,8 +221,7 @@ _connect_server(struct connection *c)
   return 0;
 }
 
-static void
-_check_server(struct cfg *cfg, struct server *s)
+static void _check_server(struct cfg *cfg, struct server *s)
 {
   int fd, r;
   struct addrinfo *a = s->ai;
@@ -245,8 +232,7 @@ _check_server(struct cfg *cfg, struct server *s)
   else    { s->status = 0; s->last = time(NULL); }
 }
 
-static void
-_client(const int s, short event, void *config)
+static void _client(const int s, short event, void *config)
 {
   int c;
   struct sockaddr sa;
@@ -275,8 +261,7 @@ _client(const int s, short event, void *config)
   event_add(&cn->rev, &cfg->to);
 }
 
-static struct client *
-_find_client(struct cfg *cfg, unsigned int addr)
+static struct client * _find_client(struct cfg *cfg, unsigned int addr)
 {
   int i, j = 0;
   struct client *cl;
@@ -291,8 +276,7 @@ _find_client(struct cfg *cfg, unsigned int addr)
   return cl;
 }
 
-static int
-_startup(struct cfg *cfg)
+static int _startup(struct cfg *cfg)
 {
   struct rlimit rl;
   struct addrinfo *ai;
@@ -320,7 +304,7 @@ _startup(struct cfg *cfg)
   if (cfg->fd < 0) return -1;
 
   if (!cfg->bufsize) getsockopt(cfg->fd, SOL_SOCKET, SO_SNDBUF, &cfg->bufsize, &l);
-  if (!cfg->bufsize) cfg->bufsize    = _BUFSIZE;
+  if (!cfg->bufsize) cfg->bufsize = _BUFSIZE;
 
   if (cfg->user)  if ( !(pw = getpwnam(cfg->user)) )                    return -1;
   if (cfg->jail)  if (chroot(cfg->jail) < 0)                            return -1;
@@ -340,7 +324,7 @@ _startup(struct cfg *cfg)
   for (i = 0; i < cfg->max; i++) {
     if (i == cfg->fd) continue;
     cfg->conn[i].fd = cfg->conn[i].od = -1;
-    if ( !(cfg->conn[i].b = calloc(1, cfg->bufsize)) ) return -1;
+    if ( !(cfg->conn[i].b = malloc(cfg->bufsize + 1)) ) return -1;
     cfg->conn[i].bs       = cfg->bufsize;
     cfg->conn[i].cfg      = cfg;
     cfg->conn[i].scope    = RLB_NONE;
@@ -355,8 +339,7 @@ _startup(struct cfg *cfg)
   return listen(cfg->fd, SOMAXCONN);
 }
 
-static int
-_parse_server(struct cfg *cfg, char *str)
+static int _parse_server(struct cfg *cfg, char *str)
 {
   char *p = NULL, *cp = NULL;
   struct server *sv = NULL, *s = NULL;
@@ -374,8 +357,7 @@ _parse_server(struct cfg *cfg, char *str)
   return 0;
 }
 
-static int
-_lookup_oaddr(struct cfg *cfg, char *outb)
+static int _lookup_oaddr(struct cfg *cfg, char *outb)
 {
   struct addrinfo *res = _get_addrinfo(cfg, outb, NULL);
   if (!res) return -1;
@@ -384,8 +366,7 @@ _lookup_oaddr(struct cfg *cfg, char *outb)
   return 0;
 }
 
-struct addrinfo *
-_get_addrinfo(struct cfg *cfg, char *h, char *p)
+struct addrinfo * _get_addrinfo(struct cfg *cfg, char *h, char *p)
 {
   struct addrinfo hints, *res = NULL;
   int r;
@@ -404,8 +385,7 @@ _get_addrinfo(struct cfg *cfg, char *h, char *p)
   return res;
 }
 
-static int
-_socket(struct cfg *cfg, struct addrinfo *a, int nb, int o)
+static int _socket(struct cfg *cfg, struct addrinfo *a, int nb, int o)
 {
   int fd = -1;
   if (cfg == NULL || a == NULL) return -1;
@@ -415,8 +395,7 @@ _socket(struct cfg *cfg, struct addrinfo *a, int nb, int o)
   return fd;
 }
 
-static int
-_sockopt(const int fd, int nb)
+static int _sockopt(const int fd, int nb)
 {
   int ret = 0, on = 1;
 
@@ -439,8 +418,7 @@ _sockopt(const int fd, int nb)
 }
 
 #ifdef RLB_SO
-static int
-_load_so(struct cfg *cfg, const char *path)
+static int _load_so(struct cfg *cfg, const char *path)
 {
   dlerror();
   if ( !(cfg->h = dlopen(path, RTLD_GLOBAL | RTLD_NOW)) ) { fprintf(stderr, dlerror()); return -1; }
@@ -453,8 +431,7 @@ _load_so(struct cfg *cfg, const char *path)
 }
 #endif
 
-static int
-_cmdline(struct cfg *cfg, int ac, char *av[])
+static int _cmdline(struct cfg *cfg, int ac, char *av[])
 {
   int i, j;
   memset(cfg, 0, sizeof(struct cfg)); cfg->daemon = 1;
@@ -489,8 +466,7 @@ _cmdline(struct cfg *cfg, int ac, char *av[])
   return 0;
 }
 
-static void
-_usage(void)
+static void _usage(void)
 {
   fprintf(stderr, "\nrlb %s Copyright © 2006 RIVERDRUMS\n\n", _VERSION);
   fprintf(stderr, "usage: rlb -p port [-b addr] [-B addr] -h host:port[:max]... [-m max] [-t secs] [-c secs] [-s size] [-n num] [-u user] [-j jail] [-l clients] [-r] [-S] [-d] [-f]");

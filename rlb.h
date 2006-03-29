@@ -37,7 +37,7 @@ struct server {
 typedef enum { RLB_NONE, RLB_CLIENT, RLB_SERVER } rlb_scope;
 
 struct connection {
-  int fd, od, bs;         /**< Socket, other socket */
+  int fd, od, bs;         /**< Socket, other socket, buffer size */
   char *b;                /**< Buffer */
   unsigned int nr, nw;    /**< Read and write totals for connection */
   size_t len, pos;        /**< Length and position in buffer of data */
@@ -45,34 +45,34 @@ struct connection {
   struct server *server;  /**< RLB_CLIENT only: which server is backend */
   struct client *client;
   struct cfg *cfg;
-  rlb_scope scope;
+  rlb_scope scope;        /**< CLIENT: outside connection SERVER: backend server */
   struct sockaddr sa;     /**< Accepted client address */
 #ifdef RLB_SO
   int so_server;
   int nowrite;
-  void *userdata;     /**< Persistent across a connection */
+  void *userdata;         /**< Persistent across a connection */
 #endif
 };
 
 struct cfg {
   int bufsize, si, cs, num, daemon, fd, check, max; 
   int ci, rr, stubborn, delay;
-  struct connection *conn;
-  struct server *servers;
-  struct client *clients;
-  char *jail, *user;
-  struct timeval to;
-  char host[64], port[8];
-  struct sockaddr oaddr;
+  struct connection *conn;  /**< Array of 'max' connections */
+  struct server *servers;   /**< Array of 'si' servers */
+  struct client *clients;   /**< Array of 'ci' clients */
+  char *jail, *user;        /**< chroot() jail, run as 'user' */
+  struct timeval to;        /**< Timeout value (seconds) */
+  char host[64], port[8];   /**< Listen host and port */
+  struct sockaddr oaddr;    /**< Bind to this address on 'connect()' */
   size_t olen;
 #ifdef RLB_SO
-  void *h;            /**< Handle to shared object */
-  void *userdata;     /**< Persistent while process is running */
-  int  (*fl)(struct connection *, int);
-  void (*cl)(struct connection *);
-  void (*gs)(struct cfg *, struct connection *);
-  int  (*in)(struct cfg *);
-  void (*fr)(struct cfg *);
+  void *h;                  /**< Handle to shared object */
+  void *userdata;           /**< Persistent while process is running */
+  int  (*fl)(struct connection *, int);   /**< Filter */
+  void (*cl)(struct connection *);        /**< Connection close */
+  void (*gs)(struct cfg *, struct connection *);  /**< Custom choose server */
+  int  (*in)(struct cfg *);               /**< Global init */
+  void (*fr)(struct cfg *);               /**< Global shutdown */
 #endif
 };
 
