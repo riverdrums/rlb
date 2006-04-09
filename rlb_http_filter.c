@@ -7,32 +7,50 @@
 
 
 /************************************
- *    USER CONFIGURABLE VARIABLES
+ *   USER CONFIGURABLE VARIABLES
  ************************************/
 
 /**
  * Change this variable to the public name (or IP address) and port 
  * of the machine running rlb. It is used in 'Location' headers, to
  * replace the address of the backend server with the address of the
- * load balancer itself. It is used when filtering data from the
+ * load balancer itself. It is invoked when filtering data from the
  * server back to the client.
  */
-#define RLB_HERE   "my.ip.address:80"  /**< Change to the address and port running rlb */
+#define RLB_HERE   "svane:9999"  /**< Change to the address and port running rlb */
 
 /**
  * This variable is substituted in the 'Host' and 'Referer' headers
  * sent to the backend server. It is called when filtering data
  * from the client to the server.
- * Note that if the public name of the load balancing machine is the same 
+ * If the public name of the load balancing machine is the same 
  * as the name of the website, then you can comment this line out.
  */
 #define RLB_HOST   "riverdrums.com"  /**< Host header and Referer */
+
+/**
+ * If you have a separate image server, define that here. All URLs that
+ * have RLB_IMAGE_STRING in the first 32 bytes of the request will be 
+ * redirected to this server.
+ * Comment the first line out if you don't want this
+ */
+#define RLB_IMAGE_SERVER  "tau"
+#define RLB_IMAGE_PORT    "82"
+#define RLB_IMAGE_STRING  "thumbs"    /**< What to look for in the URL */
 
 /**
  * Where to log to. Make sure that there are sufficient permissions on this
  * file if you set either of the 'user' or 'jail' options for rlb
  */
 #define LOGFILE     "access_log"      /**< Logfile */
+
+
+/**
+ * Uncomment this to see header information in both directions, but 
+ * you need to run rlb with the -f option.
+ */
+// #define RLB_DEBUG
+
 
 /************************************
  * END OF USER CONFIGURABLE VARIABLES
@@ -51,8 +69,8 @@
  * Data that we extract from a request. 
  *
  *  - request     : GET /index.html HTTP/1.1
- *  - user_agent  : 
- *  - referer     : 
+ *  - user_agent  : Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.12) Gecko/20050922 Firefox/1.0.7 (Debian package 1.0.7-1)
+ *  - referer     : http://riverdrums.com/test.html
  *  - code        : Code returned by server
  *  - size        : Size of data returned
  *
@@ -66,32 +84,77 @@ struct request {
   unsigned int size;
 };
 
+/**
+ * Data structure persistent whilst rlb is running
+ */
+struct rlbfilter {
+  FILE *f;            /**< Logfile handle, kept open for the whole process */
+  struct server *s;   /**< Our own custom servers */
+  int si;             /**< Number of servers */
+};
+
+/* Function declarations */
 int   rlb_init(struct cfg *cfg);
 void  rlb_cleanup(struct cfg *cfg);
 int   rlb_filter(struct connection *c, int r);
 int   rlb_close(struct connection *c);
+void  rlb_get_server(struct connection *c);
+
 int   _request(struct request *r, char *buf, int len);
 void  _log(struct cfg *cfg, struct connection *c);
 int   _move(struct connection *c, char *start, char *end, char *insert, int len);
 char *_strnstr(char *str, char *find, int hl);
+void  _add_server(struct rlbfilter *rlbf, char *host, char *port);
+struct addrinfo * _get_addrinfo(char *h, char *p);
 
 /**
- * Startup code. Store a global file pointer to the logfile
+ * Startup code. Store a global file pointer to the logfile. 
+ * Initialise our own set of servers.
  */
 int rlb_init(struct cfg *cfg) 
 {
-  FILE *f = fopen(LOGFILE, "a+");
-  if (f) cfg->userdata = (FILE *) f;
-  return 0;
+  struct rlbfilter *rlbf = calloc(1, sizeof(struct rlbfilter));
+  if (rlbf) {
+    cfg->userdata = (void *) rlbf;
+    rlbf->f = fopen(LOGFILE, "a+");
+#ifdef RLB_IMAGE_SERVER
+    _add_server(rlbf, RLB_IMAGE_SERVER, RLB_IMAGE_PORT);
+#endif
+  }
+  return rlbf ? 0 : -1;
 }
 
+
 /**
- * Close the logfile if needed
+ * Add a server to our own server structure
+ */
+void _add_server(struct rlbfilter *rlbf, char *host, char *port)
+{
+  struct server *sv = NULL, *s = NULL;
+  int r, fd;
+  struct addrinfo *a;
+  if ( !(sv = realloc(rlbf->s, (rlbf->si + 1) * sizeof(struct server))) ) return;
+  rlbf->s = sv; s = &sv[rlbf->si]; memset(s, 0, sizeof(struct server));
+  if ( !(s->ai = a = _get_addrinfo(host, port)) ) return; rlbf->si++;
+  if ( (fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol)) < 0) return;
+  do { r = connect(fd, a->ai_addr, a->ai_addrlen); } while (r == -1 && errno == EINTR);
+  shutdown(fd, 2); close(fd);
+  if (!r) { s->status = 1; s->last = 0; s->num = 0; }
+  else    { s->status = 0; s->last = time(NULL); }
+}
+
+
+/**
+ * Close the logfile if needed. Free server and data structures.
  */
 void rlb_cleanup(struct cfg *cfg) 
 {
-  FILE *f = (FILE *) cfg->userdata;
-  if (f) fclose(f);
+  struct rlbfilter *rlbf = (struct rlbfilter *) cfg->userdata;
+  if (rlbf) {
+    if (rlbf->f) fclose(rlbf->f);
+    if (rlbf->s) free(rlbf->s);
+    free(rlbf);
+  }
 }
 
 /**
@@ -99,7 +162,8 @@ void rlb_cleanup(struct cfg *cfg)
  *  
  *  - RLB_CLIENT: Rewrite the 'Host' and 'Referer' headers, and 
  *                extract data from the request that will be
- *                logged at a later point.
+ *                logged at a later point. Redirect traffic to
+ *                our custom image server.
  *  - RLB_SERVER: Rewrite the 'Location' header returned from the
  *                server. Extract the server return code, and keep
  *                a running track of the data size being returned.
@@ -124,6 +188,7 @@ int rlb_filter(struct connection *c, int r)
       /* This is guaranteed to work, provided that when we realloc() that we also
        * add one (as in rlb.c) */
       *(c->b + c->pos + c->len) = 0;
+
 
 #ifdef RLB_HOST
       {
@@ -159,11 +224,31 @@ int rlb_filter(struct connection *c, int r)
         memcpy(rr, &r, sizeof(struct request));
         c->userdata = (void *) rr;
       }
+
+
+#ifdef RLB_DEBUG
+      /* Print out any header data */
+      *(c->b + c->pos + c->len) = 0;
+      printf("------\n%s", c->b + c->pos);
+      fflush(stdout);
+#endif
+
+#ifdef RLB_IMAGE_SERVER
+      {
+        struct rlbfilter *rlbf = (struct rlbfilter *) cfg->userdata;
+        if (_strnstr(c->b + c->pos, RLB_IMAGE_STRING, 32)) {
+          c->so_server = &rlbf->s[0];
+        } else if (c->server && c->server == &rlbf->s[0]) {
+          c->reconnect = 1;
+        }
+      }
+#endif
+
     }
 
   } else if (c->scope == RLB_SERVER) {
     /* 
-     * Only the RLB_CLIENT allocates the userdata variable, so we
+     * The RLB_CLIENT allocates the userdata variable, so we
      * need to look at the 'other' side of the connection to
      * access the request data 
      */
@@ -185,8 +270,17 @@ int rlb_filter(struct connection *c, int r)
 
         /* Look for the end of the header */
         if ( ( (p = _strnstr(c->b + c->pos, "\r\n\r\n", c->len)) && (l = 4) ) || 
-             ( (p = _strnstr(c->b + c->pos, "\n\n", c->len)) && (l = 2) ) ) {
+             ( (p = _strnstr(c->b + c->pos, "\n\n",     c->len)) && (l = 2) ) ) {
+#ifdef RLB_DEBUG
+          char sav = *p;
+          *p = 0;
+          printf("======\n");
+          printf("%s\n", c->b + c->pos);
+          fflush(stdout);
+          *p = sav;
+#endif
           p += l;
+
           /* The request size doesn't include the header */
           rq->size = (c->b + c->pos + c->len) - p;
         }
@@ -248,7 +342,7 @@ int _move(struct connection *c, char *start, char *end, char *insert, int len)
 }
 
 /**
- * Get's called twice when a connection is closed, one for
+ * Gets called twice when a connection is closed, one for
  * the CLIENT end and once for the SERVER end. However, only
  * the CLIENT connection sets the 'userdata' variable.
  */
@@ -274,22 +368,22 @@ int rlb_close(struct connection *c)
 void
 _log(struct cfg *cfg, struct connection *c)
 {
-  FILE *f = NULL;
   struct request *r = NULL;
+  struct rlbfilter *rlbf = NULL;
   
   if (!c || c->scope != RLB_CLIENT) return;
-  if ( (r = (struct request *) c->userdata) && (f = (FILE *) cfg->userdata) ) {
+  if ( (r = (struct request *) c->userdata) && (rlbf = (struct rlbfilter *) cfg->userdata) && rlbf->f) {
     char h[64], buf[32], *tf = "%d/%b/%Y:%T %z";
     struct sockaddr *sa = &c->sa;
     time_t t;
     if (getnameinfo(sa, sizeof(*sa), h, sizeof(h), NULL, 0, NI_NUMERICHOST) != 0) *h = 0;
     t = time(NULL); strftime(buf, sizeof(buf) - 1, tf, localtime(&t));
-    fprintf(f, "%s - - [%s] \"%s\" %d %u \"%s\" \"%s\"\n", 
-                    *h ? h : "UNKNOWN", buf, 
-                    r->request, r->code, r->size,
-                    *r->referer    ? r->referer    : "-",
-                    *r->user_agent ? r->user_agent : "-");
-    fflush(f);
+    fprintf(rlbf->f, "%s - - [%s] \"%s\" %d %u \"%s\" \"%s\"\n", 
+                      *h ? h : "UNKNOWN", buf, 
+                      r->request, r->code, r->size,
+                      *r->referer    ? r->referer    : "-",
+                      *r->user_agent ? r->user_agent : "-");
+    fflush(rlbf->f);
     free(r); c->userdata = NULL;
   }
 }
@@ -362,3 +456,36 @@ _strnstr(char *str, char *find, int hl)
   return NULL;
 }
 
+/**
+ * This could get called:
+ *  - If there is no 'delay': after the client connects, before connecting to the server
+ *  - With 'delay': After the first read from the client, after any filter, before connecting to the server
+ */
+void rlb_get_server(struct connection *c)
+{
+  if (c->so_server == NULL) {
+    struct cfg *cfg = c->cfg;
+    struct rlbfilter *rlbf = (struct rlbfilter *) cfg->userdata;
+    if (rlbf && rlbf->s) c->so_server = &rlbf->s[0];
+  }
+}
+
+
+struct addrinfo * _get_addrinfo(char *h, char *p)
+{
+  struct addrinfo hints, *res = NULL;
+  int r;
+
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_flags    = AI_PASSIVE;
+  hints.ai_family   = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_protocol = 0;
+
+  if ( (r = getaddrinfo(*h ? h : NULL, p, &hints, &res)) ) { 
+    fprintf(stderr, "%s - %s\n", *h ? h : "", gai_strerror(r)); 
+    if (res) freeaddrinfo(res);
+    return NULL; 
+  }
+  return res;
+}

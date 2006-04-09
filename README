@@ -23,7 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 PREFACE
 
-RLB is a no-frills load balancer, aimed at clarity and efficiency.
+RLB is a no-frills TCP load balancer, aimed at clarity and efficiency.
 
 
 REQUIREMENTS
@@ -37,8 +37,9 @@ COMPILING
 1. Install libevent
 
 2. gcc -Wall -O2 -o rlb rlb.c -levent
-Solaris:
-  a) cc -Wall -O2 -o rlb rlb.c -lnsl -lsocket -levent
+
+  Solaris:
+  $ cc -Wall -O2 -o rlb rlb.c -lnsl -lsocket -levent
 
   If you want to use the content filtering API:
   $ gcc -DRLB_SO -Wall -O2 -o rlb rlb.c -levent -ldl
@@ -48,6 +49,8 @@ Solaris:
 
   To use your own filter:
   $ rlb -p 80 -h host1:80 -h host2:80 [other options] -o ./filter.so
+
+Other command line options: send to the author.
 
 
 USAGE
@@ -81,9 +84,10 @@ OPTIONS
   -n  num   Number of processes to start. All processes will listen on the same
             port. Set to the number of CPUs.
   -l  num   Number of clients to keep track of simultaneously. Oldest clients
-            are kicked out. This implements simple sessions, where the same IP
-            address will be sent back to the same server. Default is
-            4096.
+            are kicked out. This implements simple sessions, where the
+            same IP address will be sent back to the same server.
+            Default is 4096. For more advanced session tracking, write a
+            content filter.
   -S        Stubborn client. If the client connected to a certain server
             previously and it is currently unavailable (or maxed out), then
             don't try any other servers.
@@ -112,6 +116,9 @@ about previous client/server pairs. In this case, if the server is
 unavailable, the client will be disconnected (and won't be able to
 transact until it is expired from the client tracking array, or the
 server becomes available again).
+
+For more advanced session tracking, such as cookie tracking for HTTP
+requests, see the content filtering API.
 
 
 CONTENT FILTER API
@@ -158,10 +165,10 @@ int rlb_init(struct cfg *cfg) {
 
 2. void rlb_cleanup(struct cfg *);
 
-  This function is called (if defined) just before the process exits,
-  before the handle to the shared object is closed. You should generally
-  use it to de-allocate resources, and perform any other closing down
-  actions necessary.
+  This function is called just before the process exits, before the
+  handle to the shared object is closed. You should generally use it to
+  de-allocate resources, and perform any other closing down actions
+  necessary.
 
   Example:
 
@@ -244,35 +251,18 @@ int rlb_filter(struct connection *c, int r) {
   which server to direct a connection to. It is not complete as yet, and
   shouldn't be relied on to stay in it's current format.
 
-  As it is, you can traverse the set of pre-defined servers via the
-  cfg->servers array, choose which one you want to use, and then set the
-  connection variable 'so_server' to that number.
-
-Example:
-
-void rlb_get_server(struct cfg *cfg, struct connection *c) {
-  int i;
-  for (i = 0; i < cfg->si; i++) {
-    struct server *s = &cfg->servers[i];
-    if (some criteria is fulfilled) {
-      c->so_server = i;
-      return;
-    }
-  }
-}
-
-  The so_server variable gets reset to -1 after every time it is used.
-
-  However, the plan is that this function should be able to set a server
-  independently of the servers loaded at startup, and that is on the
-  todo list.
+  Basically, you allocate the so_server (server *) variable in the
+  connection data structure. The rlb engine then notices this, and
+  connects to your specified server. You need to assign the variables in
+  the server structure, such as the addrinfo pointer, as well as the
+  'status' variable to indicate that the server is alive.
 
 
 NOTE ON MEMORY USAGE
 
 The default behaviour is to take the maximum number of file descriptors
 that can be opened by the process, and for each of these 'connection'
-data structures, to allocate SO_SNDBUF size a char array.  This will
+data structures, to allocate a SO_SNDBUF size char array.  This will
 result in the program allocating > 16 Mb of memory. If this is an issue,
 then you need to either reduce the maximum number of connections (via
 the -m max flag) or the size of the allocated buffers (via the -s size
@@ -284,7 +274,7 @@ TODO
 1. Server selection algorithms
 2. Reload on the fly without losing any current connections
 3. Re-select server after first read error (non-blocking connect error)
-4. rlb_get_server() API interface
+4. Finalise the rlb_get_server() API interface
 
 
 CREDITS
