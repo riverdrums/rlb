@@ -23,13 +23,13 @@
 #include <event.h>
 
 struct client {
-  unsigned int id;
-  int server;
-  time_t last;
+  unsigned int id;        /**< Client IP address */
+  struct server * server; /**< Who the client connected to last time */
+  time_t last;            /**< Last operation to that server */
 };
 
 struct server {
-  int weight, status, num, max, id;
+  int weight, status, num, max;
   struct addrinfo *ai;
   time_t last;
 };
@@ -48,7 +48,8 @@ struct connection {
   rlb_scope scope;        /**< CLIENT: outside connection SERVER: backend server */
   struct sockaddr sa;     /**< Accepted client address */
 #ifdef RLB_SO
-  int so_server;
+  struct server *so_server;
+  int reconnect;          /**< Reconnect to another server during a connection */
   int nowrite;
   void *userdata;         /**< Persistent across a connection */
 #endif
@@ -66,11 +67,11 @@ struct cfg {
   struct sockaddr oaddr;    /**< Bind to this address on 'connect()' */
   size_t olen;
 #ifdef RLB_SO
-  void *h;                  /**< Handle to shared object */
-  void *userdata;           /**< Persistent while process is running */
+  void *h;                                /**< Handle to shared object */
+  void *userdata;                         /**< Persistent while process is running */
   int  (*fl)(struct connection *, int);   /**< Filter */
   void (*cl)(struct connection *);        /**< Connection close */
-  void (*gs)(struct cfg *, struct connection *);  /**< Custom choose server */
+  void (*gs)(struct connection *);        /**< Custom choose server */
   int  (*in)(struct cfg *);               /**< Global init */
   void (*fr)(struct cfg *);               /**< Global shutdown */
 #endif
