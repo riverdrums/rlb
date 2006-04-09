@@ -31,7 +31,7 @@ static void _close(struct cfg *cfg, struct connection *c);
 static void _check_server(struct cfg *cfg, struct server *s);
 static int  _socket(struct cfg *cfg, struct addrinfo *a, int nb, int o);
 static struct client *   _find_client(struct cfg *cfg, unsigned int addr);
-static struct addrinfo * _get_addrinfo(struct cfg *cfg, char *h, char *p);
+static struct addrinfo * _get_addrinfo(char *h, char *p);
 static struct server *   _get_server(struct cfg *cfg, struct connection *c);
 
 int main(int argc, char *argv[]) {
@@ -92,9 +92,11 @@ static void _read(const int fd, short event, void *c)
   cn->nr += r; cn->len += r;
 #ifdef RLB_SO
   if (cfg->fl) if (cfg->fl(cn, r) < 0) return _close(cfg, cn);
-  if (cn->nr - r == 0 && cfg->gs && cn->scope == RLB_CLIENT && cfg->delay) cfg->gs(cfg, cn);
 #endif
   if (cn->nr - r == 0 && cn->scope == RLB_CLIENT && cfg->delay) {
+#ifdef RLB_SO
+    if (cfg->gs) cfg->gs(cn);
+#endif
     if (_connect_server(cn) < 0) return _close(cfg, cn); 
     co = &cfg->conn[cn->od]; 
   }
@@ -110,20 +112,34 @@ static void _write(const int fd, short event, void *c)
 
   if (event & EV_TIMEOUT || cn->od < 0) return _close(cfg, cn);
   co = &cfg->conn[cn->od];
-  if (co->len > 0) {
-    do { r = write(fd, co->b + co->pos, co->len - co->pos); } while (r == -1 && errno == EINTR);
-    if (r != co->len - co->pos) {
-      if (r <= 0) {
-        if (cn->scope == RLB_SERVER && cn->nw == 0) { /* XXX Try next server */ }
-        return _close(cfg, cn);
-      }
-      co->pos += r; cn->nw += r;
+  if (co->nowrite == 0) {
+#ifdef RLB_SO
+    if (cn->scope == RLB_SERVER && ((co->so_server && co->server != co->so_server) || co->reconnect) ) {
+      _reset(cfg, cn); cn->od = -1;
+      if (_connect_server(co) < 0) return _close(cfg, co);
+      cn = &cfg->conn[co->od]; 
+      event_set(&cn->wev, cn->fd, EV_WRITE, _write, cn);
       event_add(&cn->wev, &cfg->to);
       return;
     }
-    co->len = 0; cn->nw += r;
+    if (co->so_server) co->so_server = NULL;
+#endif
+    if (co->len > 0) {
+      do { r = write(fd, co->b + co->pos, co->len - co->pos); } while (r == -1 && errno == EINTR);
+      if (r != co->len - co->pos) {
+        if (r <= 0) {
+          if (cn->scope == RLB_SERVER && cn->nw == 0) { /* XXX Try next server */ }
+          return _close(cfg, cn);
+        }
+        co->pos += r; cn->nw += r; co->len -= r;
+        /* XXX We can still read from 'co', as long as there is room in the buffer */
+        event_add(&cn->wev, &cfg->to);
+        return;
+      }
+      co->len = 0; cn->nw += r;
+    }
+    co->pos = 0;
   }
-  co->pos = 0;
   event_set(&co->rev, co->fd, EV_READ, _read, co);
   event_add(&co->rev, &cfg->to);
 }
@@ -153,12 +169,13 @@ static void _reset(struct cfg *cfg, struct connection *c)
 static struct server * _get_server(struct cfg *cfg, struct connection *c)
 {
   struct server *s = NULL;
-  int i = cfg->cs, j;
+  int i = cfg->cs;
   time_t now = 0;
 
 #ifdef RLB_SO
-  if (cfg->delay && (j = c->so_server) >= 0) {
-    c->so_server = -1; s = &cfg->servers[j]; 
+  if (c->reconnect) c->reconnect = 0;
+  if (c->so_server) {
+    s = c->so_server; c->so_server = NULL;
     if (s->status && (s->max ? s->num + 1 <= s->max : 1)) return s; 
     if (!s->status) {
       if (!s->last) s->last = time(NULL);
@@ -168,8 +185,7 @@ static struct server * _get_server(struct cfg *cfg, struct connection *c)
   }
 #endif
 
-  if (!cfg->rr && (j = c->client->server) >= 0) { 
-    s = &cfg->servers[j]; 
+  if (!cfg->rr && (s = c->client->server) ) {
     if (s->status && (s->max ? s->num + 1 <= s->max : 1)) return s; 
     if (cfg->stubborn) {
       if (!s->status) {
@@ -200,6 +216,7 @@ static int _connect_server(struct connection *c)
   struct addrinfo *a;
   int fd = -1, r;
 
+  if (c->scope != RLB_CLIENT) return -1;
   while ( (c->server = _get_server(cfg, c)) ) {
     if ( (fd = _socket(cfg, (a = c->server->ai), 0, 1)) < 0) return -1;
     do { r = connect(fd, a->ai_addr, a->ai_addrlen); } while (r == -1 && errno == EINTR);
@@ -207,7 +224,7 @@ static int _connect_server(struct connection *c)
     break;
   }
   if (!c->server || (!cfg->rr && !c->client) || fd < 0) return -1;
-  if (!cfg->rr && c->client->server < 0) { c->client->server = c->server->id; c->client->last = time(NULL); }
+  if (!cfg->rr && !c->client->server) { c->client->server = c->server; c->client->last = time(NULL); }
 
   c->server->num++;
   cn = &cfg->conn[fd];
@@ -256,6 +273,9 @@ static void _client(const int s, short event, void *config)
     cn->client = _find_client(cfg, si->sin_addr.s_addr);
   }
 
+#ifdef RLB_SO
+  if (!cfg->delay && cfg->gs) cfg->gs(cn);
+#endif
   if (!cfg->delay) if (_connect_server(cn) < 0) return _close(cfg, cn);
   event_set(&cn->rev, cn->fd, EV_READ, _read, cn);
   event_add(&cn->rev, &cfg->to);
@@ -268,11 +288,11 @@ static struct client * _find_client(struct cfg *cfg, unsigned int addr)
   time_t oldest = 0;
   for (i = 0; i < cfg->ci; i++) {
     cl = &cfg->clients[i];
-    if (cl->id == 0) { cl->id = addr; cl->server = -1; return cl; }
+    if (cl->id == 0) { cl->id = addr; cl->server = NULL; return cl; }
     if (cl->id == addr) return cl;
     if (!oldest || cl->last < oldest) { oldest = cl->last; j = i; }
   }
-  cl = &cfg->clients[j]; cl->id = addr; cl->server = -1;
+  cl = &cfg->clients[j]; cl->id = addr; cl->server = NULL;
   return cl;
 }
 
@@ -297,7 +317,7 @@ static int _startup(struct cfg *cfg)
   if ( !(cfg->conn = calloc(cfg->max, sizeof(struct connection))) ) return -1;
   for (i = 3; i < cfg->max; i++) close(i);
 
-  if ( !(ai = _get_addrinfo(cfg, cfg->host, cfg->port))) return -2;
+  if ( !(ai = _get_addrinfo(cfg->host, cfg->port))) return -2;
   cfg->fd = _socket(cfg, ai, 1, 0);
   if (cfg->fd >= 0) if (bind(cfg->fd, ai->ai_addr, ai->ai_addrlen) < 0) { close(cfg->fd); cfg->fd = -1; }
   freeaddrinfo(ai);
@@ -329,7 +349,7 @@ static int _startup(struct cfg *cfg)
     cfg->conn[i].cfg      = cfg;
     cfg->conn[i].scope    = RLB_NONE;
 #ifdef RLB_SO
-    cfg->conn[i].so_server = -1;
+    cfg->conn[i].so_server = NULL;
 #endif
   }
 #ifdef RLB_SO
@@ -350,7 +370,7 @@ static int _parse_server(struct cfg *cfg, char *str)
 
   if ( !(sv = realloc(cfg->servers, (cfg->si + 1) * sizeof(struct server))) ) return -1;
   cfg->servers = sv; s = &sv[cfg->si]; memset(s, 0, sizeof(struct server));
-  if ( !(s->ai = _get_addrinfo(cfg, str, cp + 1)) ) return -1; s->id = cfg->si++;
+  if ( !(s->ai = _get_addrinfo(str, cp + 1)) ) return -1; cfg->si++;
 
   if (p) { *p++ = ':'; if (*p) s->max = atoi(p); } *cp = ':';
   _check_server(cfg, s);
@@ -359,14 +379,14 @@ static int _parse_server(struct cfg *cfg, char *str)
 
 static int _lookup_oaddr(struct cfg *cfg, char *outb)
 {
-  struct addrinfo *res = _get_addrinfo(cfg, outb, NULL);
+  struct addrinfo *res = _get_addrinfo(outb, NULL);
   if (!res) return -1;
   memcpy(&cfg->oaddr, res->ai_addr, (cfg->olen = res->ai_addrlen) );
   freeaddrinfo(res);
   return 0;
 }
 
-struct addrinfo * _get_addrinfo(struct cfg *cfg, char *h, char *p)
+struct addrinfo * _get_addrinfo(char *h, char *p)
 {
   struct addrinfo hints, *res = NULL;
   int r;
