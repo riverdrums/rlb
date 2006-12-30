@@ -24,7 +24,7 @@
 
 struct client {
   unsigned int id;        /**< Client IP address */
-  struct server * server; /**< Who the client connected to last time */
+  struct server *server;  /**< Who the client connected to last time */
   time_t last;            /**< Last operation to that server */
 };
 
@@ -45,8 +45,9 @@ struct connection {
   struct server *server;  /**< RLB_CLIENT only: which server is backend */
   struct client *client;
   struct cfg *cfg;
-  rlb_scope scope;        /**< CLIENT: outside connection SERVER: backend server */
+  rlb_scope scope;        /**< CLIENT=outside connection SERVER=backend server */
   struct sockaddr sa;     /**< Accepted client address */
+  int closed;
 #ifdef RLB_SO
   struct server *so_server;
   int reconnect;          /**< Reconnect to another server during a connection */
@@ -69,11 +70,11 @@ struct cfg {
 #ifdef RLB_SO
   void *h;                                /**< Handle to shared object */
   void *userdata;                         /**< Persistent while process is running */
-  int  (*fl)(struct connection *, int);   /**< Filter */
-  void (*cl)(struct connection *);        /**< Connection close */
-  void (*gs)(struct connection *);        /**< Custom choose server */
-  int  (*in)(struct cfg *);               /**< Global init */
-  void (*fr)(struct cfg *);               /**< Global shutdown */
+  int  (*fl)(struct connection *, int);   /**< Filter               rlb_filter() */
+  void (*cl)(struct connection *);        /**< Connection close     rlb_close() */
+  void (*gs)(struct connection *);        /**< Custom choose server rlb_get_server() */
+  int  (*in)(struct cfg *);               /**< Global init          rlb_init() */
+  void (*fr)(struct cfg *);               /**< Global shutdown      rlb_cleanup() */
 #endif
 };
 
