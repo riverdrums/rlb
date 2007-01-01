@@ -5,19 +5,27 @@
 #include <rlb.h>
 #include <ctype.h>
 
+/**
+ * This shared object filter is intended to be used with rlb as a front-end
+ * to a cluster of web servers.
+ */
 
-/************************************
- *   USER CONFIGURABLE VARIABLES
- ************************************/
+
+/***********************************
+ **  USER CONFIGURABLE VARIABLES  **
+ ***********************************/
 
 /**
  * Change this variable to the public name (or IP address) and port 
  * of the machine running rlb. It is used in 'Location' headers, to
  * replace the address of the backend server with the address of the
- * load balancer itself. It is invoked when filtering data from the
- * server back to the client.
+ * load balancer itself. It is used when filtering data from the
+ * server back to the client, for example in 302 replies (Location). 
+ * Comment this line out if you don't require this, but note that 
+ * this could cause the client to try to bypass your load balancer ...
  */
-#define RLB_HERE   "svane:9999"  /**< Change to the address and port running rlb */
+#define RLB_HERE   "192.168.10.100:8000"  /**< Change to the address and port running rlb */
+
 
 /**
  * This variable is substituted in the 'Host' and 'Referer' headers
@@ -26,7 +34,8 @@
  * If the public name of the load balancing machine is the same 
  * as the name of the website, then you can comment this line out.
  */
-#define RLB_HOST   "riverdrums.com"  /**< Host header and Referer */
+#define RLB_HOST   "www.riverdrums.com"  /**< Host header and Referer */
+
 
 /**
  * If you have a separate image server, define that here. All URLs that
@@ -34,35 +43,42 @@
  * redirected to this server.
  * Comment the first line out if you don't want this
  */
-#define RLB_IMAGE_SERVER  "tau"
-#define RLB_IMAGE_PORT    "82"
+//#define RLB_IMAGE_SERVER  "192.168.10.102"
+#define RLB_IMAGE_PORT    "82"        /**< Port on image server */
 #define RLB_IMAGE_STRING  "thumbs"    /**< What to look for in the URL */
+
 
 /**
  * Where to log to. Make sure that there are sufficient permissions on this
- * file if you set either of the 'user' or 'jail' options for rlb
+ * file if you set either of the 'user' or 'jail' options for rlb.
  */
 #define LOGFILE     "access_log"      /**< Logfile */
+
+
+/**
+ * If you want to replace the 'Server: ' line with a customised value, then
+ * edit and uncomment the following line. Used when filtering data from the
+ * server back to the client.
+ */
+#define RLB_SERVER_HDR  "Riverdrums Load Balancer"
 
 
 /**
  * Uncomment this to see header information in both directions, but 
  * you need to run rlb with the -f option.
  */
-// #define RLB_DEBUG
+// #define RLB_FILTER_DEBUG
 
 
-/************************************
- * END OF USER CONFIGURABLE VARIABLES
- ************************************/
+/****************************************
+ ** END OF USER CONFIGURABLE VARIABLES **
+ ****************************************/
 
 
 /**
- * Header fields to look for
+ * Header field to look for
  */
 
-#define USERAGENT   "User-Agent:"
-#define REFERER     "Referer:"
 #define LOCATION    "Location: http://"
 
 /**
@@ -71,7 +87,7 @@
  *  - request     : GET /index.html HTTP/1.1
  *  - user_agent  : Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.12) Gecko/20050922 Firefox/1.0.7 (Debian package 1.0.7-1)
  *  - referer     : http://riverdrums.com/test.html
- *  - code        : Code returned by server
+ *  - code        : Code returned by server (eg 200)
  *  - size        : Size of data returned
  *
  *  Because we can never be sure when all the data from the server
@@ -93,18 +109,19 @@ struct rlbfilter {
   int si;             /**< Number of servers */
 };
 
-/* Function declarations */
+/* API Function declarations */
 int   rlb_init(struct cfg *cfg);
 void  rlb_cleanup(struct cfg *cfg);
 int   rlb_filter(struct connection *c, int r);
 int   rlb_close(struct connection *c);
 void  rlb_get_server(struct connection *c);
 
-int   _request(struct request *r, char *buf, int len);
+/* Internal function declarations */
 void  _log(struct cfg *cfg, struct connection *c);
 int   _move(struct connection *c, char *start, char *end, char *insert, int len);
 char *_strnstr(char *str, char *find, int hl);
 void  _add_server(struct rlbfilter *rlbf, char *host, char *port);
+struct request *  _request(char *buf, int len);
 struct addrinfo * _get_addrinfo(char *h, char *p);
 
 /**
@@ -116,7 +133,10 @@ int rlb_init(struct cfg *cfg)
   struct rlbfilter *rlbf = calloc(1, sizeof(struct rlbfilter));
   if (rlbf) {
     cfg->userdata = (void *) rlbf;
-    rlbf->f = fopen(LOGFILE, "a+");
+    if ( (rlbf->f = fopen(LOGFILE, "a+")) == NULL) {
+      char pwd[256];
+      fprintf(stderr, "(%s)|%s: %s\n", getcwd(pwd, sizeof(pwd)), LOGFILE, strerror(errno));
+    }
 #ifdef RLB_IMAGE_SERVER
     _add_server(rlbf, RLB_IMAGE_SERVER, RLB_IMAGE_PORT);
 #endif
@@ -174,7 +194,7 @@ int rlb_filter(struct connection *c, int r)
   struct cfg *cfg = c->cfg;
 
   if (c->scope == RLB_CLIENT) {
-    struct request r, *rr = NULL;
+    struct request *r = NULL;
 
     /* Rewrite header information */
     if (c->len > 4 &&
@@ -204,7 +224,7 @@ int rlb_filter(struct connection *c, int r)
         }
 
         /* Rewrite the 'Referer: http://' header */
-        if ( (p = _strnstr(c->b + c->pos, REFERER, c->len)) && (p += strlen(REFERER)) ) {
+        if ( (p = _strnstr(c->b + c->pos, "Referer:", c->len)) && (p += 8) ) {
           if (p + 8 < c->b + c->pos + c->len &&
               strncasecmp(p, " http://", 8) == 0) p += 8;
           if ( (cp = memchr(p, '/', (c->b + c->pos + c->len) - p)) ) {
@@ -217,19 +237,16 @@ int rlb_filter(struct connection *c, int r)
       /* 
        * Parse the header and store the information for later logging.
        * We do this after the above two have been rewritten so that
-       * our logfiles look ok.
+       * our logfiles look correct.
        */
-      if (_request(&r, c->b + c->pos, c->len)) {
-        rr = (struct request *) malloc(sizeof(struct request));
-        memcpy(rr, &r, sizeof(struct request));
-        c->userdata = (void *) rr;
+      if ( (r = _request(c->b + c->pos, c->len)) ) {
+        c->userdata = (void *) r;
       }
 
-
-#ifdef RLB_DEBUG
+#ifdef RLB_FILTER_DEBUG
       /* Print out any header data */
       *(c->b + c->pos + c->len) = 0;
-      printf("------\n%s", c->b + c->pos);
+      printf("\n------\n%s------\n", c->b + c->pos);
       fflush(stdout);
 #endif
 
@@ -248,12 +265,12 @@ int rlb_filter(struct connection *c, int r)
 
   } else if (c->scope == RLB_SERVER) {
     /* 
-     * The RLB_CLIENT allocates the userdata variable, so we
-     * need to look at the 'other' side of the connection to
-     * access the request data 
+     * The RLB_CLIENT allocates the userdata variable (above), 
+     * so we need to look at the 'other' side of the connection 
+     * to access the request data 
      */
-    struct connection *co = &cfg->conn[c->od];
-    struct request *rq = (struct request *) co->userdata;
+    struct connection *co = c->od >= 0 ? &cfg->conn[c->od] : NULL;
+    struct request *rq    = co ? (struct request *) co->userdata : NULL;
 
     if (rq) {
       if (c->len > 7 && 
@@ -268,14 +285,34 @@ int rlb_filter(struct connection *c, int r)
           *cp2 = 0; rq->code = atoi(p); *cp2 = ' ';
         }
 
+#ifdef RLB_HERE
+        /* Modify 'Location' header */
+        if ( (p = _strnstr(c->b + c->pos, LOCATION, c->len)) && (p += strlen(LOCATION)) ) {
+          char *cp = memchr(p, '/', (c->b + c->pos + c->len) - p);
+          if (cp) {
+            if (_move(c, p, cp, RLB_HERE, strlen(RLB_HERE)) < 0) return -1;
+          }
+        }
+#endif
+
+#ifdef RLB_SERVER_HDR
+        /* Modify the 'Server' header */
+        if ( (p = _strnstr(c->b + c->pos, "Server: ", c->len)) && (p += 8) ) {
+          char *cp = memchr(p, '\r', (c->b + c->pos + c->len) - p);
+          if (!cp) cp = memchr(p, '\n', (c->b + c->pos + c->len) - p);
+          if (cp) {
+            if (_move(c, p, cp, RLB_SERVER_HDR, strlen(RLB_SERVER_HDR)) < 0) return -1;
+          }
+        }
+#endif
+
         /* Look for the end of the header */
         if ( ( (p = _strnstr(c->b + c->pos, "\r\n\r\n", c->len)) && (l = 4) ) || 
              ( (p = _strnstr(c->b + c->pos, "\n\n",     c->len)) && (l = 2) ) ) {
-#ifdef RLB_DEBUG
+#ifdef RLB_FILTER_DEBUG
           char sav = *p;
-          *p = 0;
-          printf("======\n");
-          printf("%s\n", c->b + c->pos);
+          *p = '\0';
+          printf("======\n%s\n", c->b + c->pos);
           fflush(stdout);
           *p = sav;
 #endif
@@ -283,14 +320,6 @@ int rlb_filter(struct connection *c, int r)
 
           /* The request size doesn't include the header */
           rq->size = (c->b + c->pos + c->len) - p;
-        }
-
-        /* Modify 'Location' header */
-        if ( (p = _strnstr(c->b + c->pos, LOCATION, c->len)) && (p += strlen(LOCATION)) ) {
-          char *cp = memchr(p, '/', (c->b + c->pos + c->len) - p);
-          if (cp) {
-            if (_move(c, p, cp, RLB_HERE, strlen(RLB_HERE)) < 0) return -1;
-          }
         }
 
       } else {
@@ -334,7 +363,9 @@ int _move(struct connection *c, char *start, char *end, char *insert, int len)
     }
   }
 
-  memmove(start + len, end, c->len - (end - (c->b + c->pos)));
+  if (end - start != len) {
+    memmove(start + len, end, c->len - (end - (c->b + c->pos)));
+  }
   memcpy(start, insert, len);
   c->len -= (end - start) - len;
 
@@ -384,8 +415,8 @@ _log(struct cfg *cfg, struct connection *c)
                       *r->referer    ? r->referer    : "-",
                       *r->user_agent ? r->user_agent : "-");
     fflush(rlbf->f);
-    free(r); c->userdata = NULL;
   }
+  if (r) free(r); c->userdata = NULL;
 }
 
 
@@ -393,49 +424,52 @@ _log(struct cfg *cfg, struct connection *c)
  * Parse the request header for relevant data
  */
 
-int
-_request(struct request *r, char *buf, int len)
+struct request *
+_request(char *buf, int len)
 {
   int i = 0;
-  char *p = buf;
+  char *p = buf, rq[256];
+  struct request *r = NULL;
 
-  memset(r, 0, sizeof(struct request));
-  while (*p && i < sizeof(r->request) - 1 && p < buf + len && *p != 10 && *p != 13) r->request[i++] = *p++;
-  r->request[i] = *r->referer = *r->user_agent = 0;
+  while (*p && i < sizeof(rq) - 1 && p < buf + len && *p != 10 && *p != 13) rq[i++] = *p++;
 
-  if (i) {
-    int ul = strlen(USERAGENT), rl = strlen(REFERER), nl = 0;
+  if (i && (r = calloc(1, sizeof(struct request))) ) {
+    int nl = 0, got = 0;
     char *p2 = NULL, sav;
+
+    memcpy(r->request, rq, i);
+    r->request[i] = '\0';
 
     while (p && *p && p < buf + len) {
       if (*p == 10) nl++; else if (*p != 13) nl = 0;
       if (nl >= 2) break;
 
       /* Store User-Agent: for logging */
-      if (strncasecmp(p, USERAGENT, ul) == 0) {
-        p += ul;
+      if (strncasecmp(p, "User-Agent:", 11) == 0) {
+        p += 11;
         while (*p && isspace(*p)) p++; if (!*p) break;
         if ( (p2 = strchr(p, '\n')) ) {
           if (*(p2 - 1) == '\r') p2--;
-          sav = *p2; *p2 = 0;
+          sav = *p2; *p2 = '\0';
           snprintf(r->user_agent, sizeof(r->user_agent), p);
-          p = p2; *p2 = sav;
+          p = p2; *p2 = sav; got++;
         }
-      } else if (strncasecmp(p, REFERER, rl) == 0) {
-        p += rl;
+      } else if (strncasecmp(p, "Referer:", 8) == 0) {
+        p += 8;
         while (*p && isspace(*p)) p++; if (!*p) break;
         if ( (p2 = strchr(p, '\n')) ) {
           if (*(p2 - 1) == '\r') p2--;
-          sav = *p2; *p2 = 0;
+          sav = *p2; *p2 = '\0';
           snprintf(r->referer, sizeof(r->referer), p);
-          p = p2; *p2 = sav;
+          p = p2; *p2 = sav; got++;
         }
       }
+      if (got == 2) break;
       p++;
     }
   }
 
-  return i;
+  return r;
 }
 
 
@@ -453,6 +487,7 @@ _strnstr(char *str, char *find, int hl)
   for (; p < end && len < hl; p++, hl--) {
     if (strncmp(p, find, len) == 0) return p;
   }
+
   return NULL;
 }
 
@@ -470,7 +505,9 @@ void rlb_get_server(struct connection *c)
   }
 }
 
-
+/**
+ * Do what RLB does
+ */
 struct addrinfo * _get_addrinfo(char *h, char *p)
 {
   struct addrinfo hints, *res = NULL;
@@ -487,5 +524,6 @@ struct addrinfo * _get_addrinfo(char *h, char *p)
     if (res) freeaddrinfo(res);
     return NULL; 
   }
+
   return res;
 }
