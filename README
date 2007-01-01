@@ -36,21 +36,25 @@ COMPILING
 
 1. Install libevent
 
-2. gcc -Wall -O2 -o rlb rlb.c -levent
+2. Compile RLB:
+
+  $ gcc -Wall -O2 -o rlb rlb.c -levent
 
   Solaris:
   $ cc -Wall -O2 -o rlb rlb.c -lnsl -lsocket -levent
 
   If you want to use the content filtering API:
-  $ gcc -DRLB_SO -Wall -O2 -o rlb rlb.c -levent -ldl
+  $ gcc -DRLB_SO -Wall -O2 -o rlb rlb.c -levent (-ldl)
 
-  To compile your own filter from a filter.c source file:
+3. Optionally, compile a shared object filter:
+
+  -- To compile your own filter from a filter.c source file:
   $ gcc -DRLB_SO -Wall -O2 -I. -fPIC -shared -o filter.so filter.c
 
   To use your own filter:
   $ rlb -p 80 -h host1:80 -h host2:80 [other options] -o ./filter.so
 
-Other command line options: send to the author.
+Build options for other architectures: please send to the author.
 
 
 USAGE
@@ -180,11 +184,11 @@ void rlb_cleanup(struct cfg *cfg) {
 
 3. int  rlb_filter(struct connection *, int);
 
-  This is probably the most useful function. It is called after every
-  data read, in both directions. It is passed the connection data
-  structure, where the data buffer, positions and length can be
-  accessed, as well as an integer which represents the amount of data
-  read in the last call to read().
+  This is the most useful function. It is called after every data read,
+  in both directions. It is passed the connection data structure, where
+  the data buffer, positions and length can be accessed, as well as an
+  integer which represents the amount of data read in the last call to
+  read().
 
   You can pretty much do what you like with the data, including
   reallocating memory if you want to rewrite data in the data buffer.
@@ -281,15 +285,15 @@ CREDITS
 
 Niels Provos for the great libevent library. 
 
-I have looked at a few other load balancers and related programs,
-including:
+I have looked at and learned from a few other load balancers and related
+programs, including:
 
- - PLB by Frank Denis         http://plb.sunsite.dk/
+ - PLB by Frank Denis         http://plb.sunsite.dk
  - Pen by Ulric Eriksson      http://siag.nu/pen/
  - Balance by Thomas Obermair http://balance.sourceforge.net
- - Netcat
- - Pound
- - proxy_load_balancer
+ - Pound by Robert Segall     http://www.apsis.ch/pound
+ - Netcat                     http://netcat.sourceforge.net
+ - proxy_load_balancer        http://httpd.apache.org/docs/2.2/mod/mod_proxy_balancer.html
 
 
 FEEDBACK
