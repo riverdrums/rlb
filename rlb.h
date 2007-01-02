@@ -41,7 +41,7 @@ struct connection {
   char *b;                /**< Buffer */
   unsigned int nr, nw;    /**< Read and write totals for connection */
   size_t len, pos;        /**< Length and position in buffer of data */
-  struct event rev, wev;  /**< Events (libevent) */
+  struct event ev;        /**< Event (libevent) */
   struct server *server;  /**< RLB_CLIENT only: which server is backend */
   struct client *client;
   struct cfg *cfg;        /**< Pointer to global configuration structure */
