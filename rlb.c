@@ -558,7 +558,7 @@ static int _cmdline(struct cfg *cfg, int ac, char *av[])
       default : return -1;
     }
   }
-  if (!cfg->si) return -1;
+  if (!cfg->si || !*cfg->port) return -1;
   return 0;
 }
 
