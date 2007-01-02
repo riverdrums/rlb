@@ -129,9 +129,8 @@ static void _read(const int fd, struct connection *c)
     if (cfg->gs) cfg->gs(c);
 #endif
     if (_connect_server(c) < 0) return _close(cfg, c); 
-    co = &cfg->conn[c->od]; 
   }
-  event_add(&co->ev, &cfg->to);
+  event_add(&c->ev, &cfg->to);
 }
 
 static void _write(const int fd, struct connection *c)
@@ -165,7 +164,6 @@ static void _write(const int fd, struct connection *c)
           return _close(cfg, c);
         }
         co->pos += r; c->nw += r; co->len -= r;
-        /* XXX We can still read from 'co', as long as there is room in the buffer */
         event_add(&c->ev, &cfg->to);
         return;
       }
@@ -176,7 +174,7 @@ static void _write(const int fd, struct connection *c)
   }
 #endif
   if (co->closed) return _close(cfg, c);
-  event_add(&co->ev, &cfg->to);
+  event_add(&c->ev, &cfg->to);
 }
 
 static void _close(struct cfg *cfg, struct connection *c)
