@@ -395,7 +395,7 @@ static int _startup(struct cfg *cfg)
     if ( (rc = _bind(cfg)) < 0) return rc;
     if (fork()) _exit(0); setsid(); if (fork()) _exit(0);
 
-    if (cfg->num) {
+    if (cfg->num > 1) {
       pid_t ppid = getpid();
       for (i = 0; i < cfg->num; i++) if (!fork()) break;
       if (getpid() == ppid) _exit(0);
@@ -565,9 +565,12 @@ static int _cmdline(struct cfg *cfg, int ac, char *av[])
 static void _usage(void)
 {
   fprintf(stderr, "\nrlb %s Copyright © 2006 RIVERDRUMS\n\n", _VERSION);
-  fprintf(stderr, "usage: rlb -p port -h host:service[:max] [-h host:service[:max] ...]\n           [-b address] [-B address] [-m max] [-t timeout] [-c check interval]\n           [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients to track]\n           [-r (round-robin)] [-S (stubborn)] [-d (delay)] [-f (foreground)]\n");
+  fprintf(stderr, "usage: rlb -p port -h host:service[:max] [-h host:service[:max] ...]\n"
+                  "          [-b address] [-B address] [-m max] [-t timeout] [-c check interval]\n"
+                  "          [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients to track]\n"
+                  "          [-r (round-robin)] [-S (stubborn)] [-d (delay)] [-f (foreground)]\n");
 #ifdef RLB_SO
-  fprintf(stderr, "           [-o shared object]\n");
+  fprintf(stderr, "          [-o shared object]\n");
 #endif
   exit(-1);
 }
