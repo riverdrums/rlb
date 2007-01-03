@@ -43,7 +43,7 @@ struct connection {
   size_t len, pos;        /**< Length and position in buffer of data */
   struct event ev;        /**< Event (libevent) */
   struct server *server;  /**< RLB_CLIENT only: which server is backend */
-  struct client *client;
+  struct client *client;  /**< Pointer to previous connection data */
   struct cfg *cfg;        /**< Pointer to global configuration structure */
   rlb_scope scope;        /**< CLIENT=outside connection SERVER=backend server */
   struct sockaddr sa;     /**< Accepted client address */
