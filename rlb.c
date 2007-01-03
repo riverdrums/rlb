@@ -6,7 +6,7 @@
 
 #define _VERSION  "0.5"
 #define _TIMEOUT  30        /**< Socket timeout and dead server check interval */
-#define _BUFSIZE  4096      /**< Buffer size and number of clients to track */
+#define _BUFSIZE  4096      /**< Default buffer size and number of clients to track */
 
 #ifdef RLB_SO
 #include <dlfcn.h>
@@ -24,12 +24,13 @@ static void _status(int signo);
 struct cfg *_gcfg = NULL;
 static void _usage(void);
 static void _sig(int signo);
+static void _closefd(int fd);
 static int  _bind(struct cfg *cfg);
 static int  _startup(struct cfg *cfg);
 static void _cleanup(struct cfg *cfg);
+static int  _server(struct connection *c);
 static int  _sockopt(const int fd, int nb);
 static void _reset_conn(struct connection *c);
-static int  _connect_server(struct connection *c);
 static int  _parse_server(struct cfg *cfg, char *str);
 static void _read(const int fd, struct connection *c);
 static void _event(const int fd, short event, void *c);
@@ -37,6 +38,7 @@ static int  _lookup_oaddr(struct cfg *cfg, char *outb);
 static void _write(const int fd, struct connection *c);
 static void _client(const int s, short event, void *ev);
 static struct addrinfo * _get_addrinfo(char *h, char *p);
+static void _event_set(struct connection *c, short event);
 static void _reset(struct cfg *cfg, struct connection *c);
 static int  _cmdline(struct cfg *cfg, int ac, char *av[]);
 static void _close(struct cfg *cfg, struct connection *c);
@@ -82,7 +84,7 @@ static void _sig(int signo)
 static void _cleanup(struct cfg *cfg)
 {
   int i;
-  if (cfg->fd >= 0) close(cfg->fd);
+  if (cfg->fd >= 0) _closefd(cfg->fd);
   for (i = 0; i < cfg->max; i++) {
     _close(cfg, &cfg->conn[i]);
     if (cfg->conn[i].b) free(cfg->conn[i].b); cfg->conn[i].b = NULL;
@@ -103,7 +105,7 @@ static void _event(const int fd, short event, void *c)
   if (!cn) return;
   else if (event & EV_READ)     _read(fd, cn);
   else if (event & EV_WRITE)    _write(fd, cn);
-  else if (event & EV_TIMEOUT)  _close(cn->cfg, cn);
+  else if (event & EV_TIMEOUT)  { RLOG(" @@ TIMEOUT @@ fd=%d", fd); _close(cn->cfg, cn); }
   else RLOG("Unknown event (%d) fd=%d", event, fd);
 }
 
@@ -117,8 +119,8 @@ static void _read(const int fd, struct connection *c)
   if (c->scope == RLB_SERVER && c->od < 0) return _close(cfg, c);
   if (c->od >= 0) co = &cfg->conn[c->od];
   do { r = read(fd, c->b + c->len, c->bs - c->len); } while (r == -1 && errno == EINTR);
-  RLOG("%s - R: %d fd=%d (pos=%d len=%d bs=%d)", 
-        c->scope == RLB_CLIENT ? "» CLIENT" : "« SERVER", r, fd, c->pos, c->len, c->bs);
+  RLOG("%s - R: %d fd=%d (pos=%d len=%d)", 
+        c->scope == RLB_CLIENT ? "» CLIENT" : "« SERVER", r, fd, c->pos, c->len);
   if (r <= 0) return _close(cfg, c);
   c->nr += r; c->len += r;
 #ifdef RLB_SO
@@ -128,10 +130,12 @@ static void _read(const int fd, struct connection *c)
 #ifdef RLB_SO
     if (cfg->gs) cfg->gs(c);
 #endif
-    if (_connect_server(c) < 0) return _close(cfg, c); 
+    if (_server(c) < 0) return _close(cfg, c); 
   }
+  _event_set(co, EV_WRITE);
   event_add(&c->ev, &cfg->to);
 }
+
 
 static void _write(const int fd, struct connection *c)
 {
@@ -147,16 +151,16 @@ static void _write(const int fd, struct connection *c)
     if (c->scope == RLB_SERVER && ((co->so_server && co->server != co->so_server) || co->reconnect) ) {
       /* XXX What if there is data (c->len) */
       _reset(cfg, c); c->od = -1;
-      if (_connect_server(co) < 0) _close(cfg, co);
+      if (_server(co) < 0) _close(cfg, co);
       return;
     }
     if (co->so_server) co->so_server = NULL;
 #endif
     if (co->len > 0) {
       do { r = write(fd, co->b + co->pos, co->len); } while (r == -1 && errno == EINTR);
-      RLOG("%s - W: %d fd=%d (pos=%d len=%d bs=%d) %s", 
+      RLOG("%s - W: %d fd=%d (pos=%d len=%d) %s", 
             c->scope == RLB_CLIENT ? "« CLIENT" : "» SERVER", 
-            r, fd, co->pos, co->len, co->bs, r < 0 ? strerror(errno) : "");
+            r, fd, co->pos, co->len, r < 0 ? strerror(errno) : "");
       if (r != co->len) {
         RLOG(" --- Partial write (%d/%d) fd=%d", r, co->len, fd);
         if (r <= 0) {
@@ -174,7 +178,16 @@ static void _write(const int fd, struct connection *c)
   }
 #endif
   if (co->closed) return _close(cfg, c);
-  event_add(&c->ev, &cfg->to);
+  _event_set(co, EV_READ);
+  _event_set(c, EV_READ);
+}
+
+static void _event_set(struct connection *c, short event)
+{
+  if (!c) return;
+  if (EVENT_FD((&c->ev)) >= 0) event_del(&c->ev);
+  event_set(&c->ev, c->fd, event, _event, c);
+  event_add(&c->ev, &c->cfg->to);
 }
 
 static void _close(struct cfg *cfg, struct connection *c)
@@ -205,7 +218,7 @@ static void _reset(struct cfg *cfg, struct connection *c)
 
 static void _reset_conn(struct connection *c)
 {
-  if (c->fd >= 0) { close(c->fd); c->fd = -1; }
+  if (c->fd >= 0) { _closefd(c->fd); c->fd = -1; }
   c->len = c->pos = c->nr = c->nw = c->closed = 0;
   c->scope = RLB_NONE;
   memset(&c->sa, 0, sizeof(c->sa));
@@ -254,7 +267,7 @@ static struct server * _get_server(struct cfg *cfg, struct connection *c)
   return s;
 }
  
-static int _connect_server(struct connection *c)
+static int _server(struct connection *c)
 {
   struct cfg *cfg = c->cfg;
   struct connection *cn = NULL;
@@ -264,9 +277,9 @@ static int _connect_server(struct connection *c)
   if (c->scope != RLB_CLIENT) return -1;
   while ( (c->server = _get_server(cfg, c)) ) {
     if ( (fd = _socket(cfg, (a = c->server->ai), 1, 1)) < 0) return -1;
-    if (fd >= cfg->max) { close(fd); return -1; }
+    if (fd >= cfg->max) { _closefd(fd); return -1; }
     do { r = connect(fd, a->ai_addr, a->ai_addrlen); } while (r == -1 && errno == EINTR);
-    if (r < 0 && errno != EINPROGRESS) { c->server->status = 0; close(fd); continue; }
+    if (r < 0 && errno != EINPROGRESS) { c->server->status = 0; _closefd(fd); continue; }
     break;
   }
   if (!c->server || (!cfg->rr && !c->client) || fd < 0) return -1;
@@ -289,7 +302,7 @@ static int _connect_server(struct connection *c)
   cn->server = NULL; cn->client = NULL;
   cn->scope = RLB_SERVER;
   cn->closed = 0;
-  event_set(&cn->ev, fd, EV_READ | EV_WRITE | EV_PERSIST, _event, cn);
+  event_set(&cn->ev, fd, EV_READ, _event, cn);
   event_add(&cn->ev, &cfg->to);
   return 0;
 }
@@ -300,7 +313,7 @@ static void _check_server(struct cfg *cfg, struct server *s)
   struct addrinfo *a = s->ai;
   if ( (fd = _socket(cfg, a, 0, 1)) < 0) return;
   do { r = connect(fd, a->ai_addr, a->ai_addrlen); } while (r == -1 && errno == EINTR);
-  shutdown(fd, 2); close(fd);
+  shutdown(fd, 2); _closefd(fd);
   if (!r) { s->status = 1; s->last = 0; s->num = 0; }
   else    { s->status = 0; s->last = time(NULL); }
 }
@@ -315,7 +328,7 @@ static void _client(const int s, short event, void *config)
   struct connection *cn = NULL;
 
   if ( (fd = accept(s, &sa, &l)) < 0)  return;
-  if (fd >= cfg->max || _sockopt(fd, 1) < 0) { close(fd); return; }
+  if (fd >= cfg->max || _sockopt(fd, 1) < 0) { _closefd(fd); return; }
 
   cn = &cfg->conn[fd];
   cn->fd = fd; cn->od = cn->ev.ev_fd = -1;
@@ -334,14 +347,14 @@ static void _client(const int s, short event, void *config)
 #ifdef RLB_SO
   if (!cfg->delay && cfg->gs) cfg->gs(cn);
 #endif
-  if (!cfg->delay) if (_connect_server(cn) < 0) {
+  if (!cfg->delay) if (_server(cn) < 0) {
 #ifdef RLB_DEBUG
     RLOG(" **** UNABLE TO CONNECT TO SERVER (%s) ... CLOSE", strerror(errno));
     _status(0);
 #endif
     return _close(cfg, cn);
   }
-  event_set(&cn->ev, cn->fd, EV_READ | EV_WRITE | EV_PERSIST, _event, cn);
+  event_set(&cn->ev, cn->fd, EV_READ, _event, cn);
   event_add(&cn->ev, &cfg->to);
 }
 
@@ -364,7 +377,7 @@ static int _startup(struct cfg *cfg)
 {
   struct rlimit rl;
   struct passwd *pw = NULL;
-  unsigned int i = 0, l = sizeof(cfg->bufsize);
+  unsigned int i = 0;
   int rc;
 
   getrlimit(RLIMIT_NOFILE, &rl);
@@ -379,19 +392,16 @@ static int _startup(struct cfg *cfg)
 
   if ( !(cfg->clients = calloc(cfg->ci, sizeof(struct client))) )   return -1;
   if ( !(cfg->conn = calloc(cfg->max, sizeof(struct connection))) ) return -1;
-  for (i = 3; i < cfg->max; i++) close(i);
+  for (i = 3; i < cfg->max; i++) _closefd(i);
 
   if (!cfg->daemon) if ( (rc = _bind(cfg)) < 0) return rc;
-
-  if (!cfg->bufsize) getsockopt(cfg->fd, SOL_SOCKET, SO_SNDBUF, &cfg->bufsize, &l);
-  if (!cfg->bufsize) cfg->bufsize = _BUFSIZE;
 
   if (cfg->user)  if ( !(pw = getpwnam(cfg->user)) )                    return -1;
   if (cfg->jail)  { chdir(cfg->jail); if (chroot(cfg->jail) < 0) return -1; }
   if (pw)         if (setgid(pw->pw_gid < 0) || setuid(pw->pw_uid) < 0) return -1;
 
   if (cfg->daemon) {
-    close(0); close(1); close(2);
+    _closefd(0); _closefd(1); _closefd(2);
     if ( (rc = _bind(cfg)) < 0) return rc;
     if (fork()) _exit(0); setsid(); if (fork()) _exit(0);
 
@@ -427,11 +437,14 @@ static int _startup(struct cfg *cfg)
 static int _bind(struct cfg *cfg)
 {
   struct addrinfo *ai = _get_addrinfo(cfg->host, cfg->port);
+  unsigned int l = sizeof(cfg->bufsize);
   if (!ai) return -2;
   cfg->fd = _socket(cfg, ai, 1, 0);
-  if (cfg->fd >= 0) if (bind(cfg->fd, ai->ai_addr, ai->ai_addrlen) < 0) { close(cfg->fd); cfg->fd = -1; }
+  if (cfg->fd >= 0) if (bind(cfg->fd, ai->ai_addr, ai->ai_addrlen) < 0) { _closefd(cfg->fd); cfg->fd = -1; }
   freeaddrinfo(ai);
   if (cfg->fd < 0) return -1;
+  if (!cfg->bufsize) getsockopt(cfg->fd, SOL_SOCKET, SO_SNDBUF, &cfg->bufsize, &l);
+  if (!cfg->bufsize) cfg->bufsize = _BUFSIZE;
   return 0;
 }
 
@@ -483,12 +496,18 @@ struct addrinfo * _get_addrinfo(char *h, char *p)
 
 static int _socket(struct cfg *cfg, struct addrinfo *a, int nb, int o)
 {
-  int fd = -1;
+  int fd;
   if (cfg == NULL || a == NULL) return -1;
   if ( (fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol)) < 0) return -1;
-  if (_sockopt(fd, nb) < 0) { close(fd); return -1; }
-  if (o && cfg->olen) if (bind(fd, &cfg->oaddr, cfg->olen) < 0) { close(fd); return -1; }
+  if (_sockopt(fd, nb) < 0) { _closefd(fd); return -1; }
+  if (o && cfg->olen) if (bind(fd, &cfg->oaddr, cfg->olen) < 0) { _closefd(fd); return -1; }
   return fd;
+}
+
+static void _closefd(int fd)
+{
+  int r;
+  do { r = close(fd); } while (r == -1 && errno == EINTR);
 }
 
 static int _sockopt(const int fd, int nb)
