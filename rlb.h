@@ -31,7 +31,7 @@ struct client {
 struct server {
   int weight, status, num, max;
   struct addrinfo *ai;
-  time_t last;
+  time_t last;            /**< Time of last failed connection */
 };
 
 typedef enum { RLB_NONE, RLB_CLIENT, RLB_SERVER } rlb_scope;
@@ -43,11 +43,11 @@ struct connection {
   size_t len, pos;        /**< Length and position in buffer of data */
   struct event ev;        /**< Event (libevent) */
   struct server *server;  /**< RLB_CLIENT only: which server is backend */
-  struct client *client;  /**< Pointer to previous connection data */
+  struct client *client;  /**< Pointer to previous connection information */
   struct cfg *cfg;        /**< Pointer to global configuration structure */
   rlb_scope scope;        /**< CLIENT=outside connection SERVER=backend server */
   struct sockaddr sa;     /**< Accepted client address */
-  int closed;
+  int closed;             /**< Socket is closed, but there is still data to write */
 #ifdef RLB_SO
   struct server *so_server;
   int reconnect;          /**< Reconnect to another server during a connection */
@@ -69,7 +69,7 @@ struct cfg {
   size_t olen;
 #ifdef RLB_SO
   void *h;                                /**< Handle to shared object */
-  void *userdata;                         /**< Persistent while process is running */
+  void *userdata;                         /**< Persistent while rlb is running */
   int  (*fl)(struct connection *, int);   /**< Filter               rlb_filter() */
   void (*cl)(struct connection *);        /**< Connection close     rlb_close() */
   void (*gs)(struct connection *);        /**< Custom choose server rlb_get_server() */
