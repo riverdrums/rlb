@@ -28,7 +28,6 @@ static void _closefd(int fd);
 static int  _bind(struct cfg *cfg);
 static int  _startup(struct cfg *cfg);
 static void _cleanup(struct cfg *cfg);
-static int  _server(struct connection *c);
 static int  _sockopt(const int fd, int nb);
 static void _reset_conn(struct connection *c);
 static int  _parse_server(struct cfg *cfg, char *str);
@@ -36,13 +35,14 @@ static void _read(const int fd, struct connection *c);
 static void _event(const int fd, short event, void *c);
 static int  _lookup_oaddr(struct cfg *cfg, char *outb);
 static void _write(const int fd, struct connection *c);
+static int  _server(struct connection *c, short event);
 static void _client(const int s, short event, void *ev);
 static struct addrinfo * _get_addrinfo(char *h, char *p);
 static void _event_set(struct connection *c, short event);
 static void _reset(struct cfg *cfg, struct connection *c);
 static int  _cmdline(struct cfg *cfg, int ac, char *av[]);
 static void _close(struct cfg *cfg, struct connection *c);
-static void _check_server(struct cfg *cfg, struct server *s);
+static int  _check_server(struct cfg *cfg, struct server *s);
 static int  _socket(struct cfg *cfg, struct addrinfo *a, int nb, int o);
 static struct client * _find_client(struct cfg *cfg, unsigned int addr);
 static struct server * _get_server(struct cfg *cfg, struct connection *c);
@@ -59,7 +59,7 @@ int main(int argc, char *argv[]) {
 
   if ( (r = _startup(&cfg)) < 0) {
     if (r == -1) fprintf(stderr, "rlb: %s\n", strerror(errno));
-    _cleanup(&cfg); exit(-1);
+    _cleanup(&cfg); exit(EXIT_FAILURE);
   }
 
   signal(SIGINT, _sig); signal(SIGTERM, _sig); signal(SIGQUIT, _sig);
@@ -75,7 +75,7 @@ int main(int argc, char *argv[]) {
 
 static void _sig(int signo)
 {
-  _cleanup(_gcfg); exit(0);
+  _cleanup(_gcfg); exit(EXIT_SUCCESS);
 }
 
 static void _cleanup(struct cfg *cfg)
@@ -102,7 +102,7 @@ static void _event(const int fd, short event, void *c)
   if (!cn) return;
   else if (event & EV_READ)     _read(fd, cn);
   else if (event & EV_WRITE)    _write(fd, cn);
-  else if (event & EV_TIMEOUT)  { RLOG(" ** TIMEOUT fd=%d **", fd); _close(cn->cfg, cn); }
+  else if (event & EV_TIMEOUT)  _close(cn->cfg, cn);
 }
 
 static void _read(const int fd, struct connection *c)
@@ -126,9 +126,8 @@ static void _read(const int fd, struct connection *c)
 #ifdef RLB_SO
     if (cfg->gs) cfg->gs(c);
 #endif
-    if (_server(c) < 0) return _close(cfg, c); 
-  }
-  _event_set(co, EV_WRITE);
+    if (_server(c, EV_WRITE) < 0) return _close(cfg, c); 
+  } else _event_set(co, EV_WRITE);
   event_add(&c->ev, &cfg->to);
 }
 
@@ -145,7 +144,7 @@ static void _write(const int fd, struct connection *c)
   if (co->nowrite == 0) {
     if (c->scope == RLB_SERVER && ((co->so_server && co->server != co->so_server) || co->reconnect) ) {
       _reset(cfg, c); c->od = -1;     /* XXX What if there is data (c->len) */
-      if (_server(co) < 0) _close(cfg, co);
+      if (_server(co, EV_WRITE) < 0) _close(cfg, co);
       return;
     }
     if (co->so_server) co->so_server = NULL;
@@ -219,46 +218,44 @@ static struct server * _get_server(struct cfg *cfg, struct connection *c)
 {
   struct server *s = NULL;
   int i = cfg->cs;
-  time_t now = 0;
+  time_t now = time(NULL);
 
 #ifdef RLB_SO
   if (c->reconnect) c->reconnect = 0;
-  if (c->so_server) {
-    s = c->so_server; c->so_server = NULL;
-    if (s->status && (s->max ? s->num + 1 <= s->max : 1)) return s; 
+  if ( (s = c->so_server) ) {
+    c->so_server = NULL;
+    if (s->status && (s->max ? s->num + 1 <= s->max : 1) ) return s; 
     if (!s->status) {
-      if (!s->last) s->last = time(NULL);
-      else if (time(NULL) - s->last >= cfg->check) { _check_server(cfg, s); if (s->status) return s; }
+      if (!s->last) s->last = now;
+      else if (now - s->last >= cfg->check) { if (_check_server(cfg, s)) return s; }
     }
     return NULL;
   }
 #endif
 
-  if (!cfg->rr && (s = c->client->server) ) {
-    if (s->status && (s->max ? s->num + 1 <= s->max : 1)) return s; 
+  if (!cfg->rr && c->client && (s = c->client->server) ) {
+    if (s->status && (s->max ? s->num + 1 <= s->max : 1) ) return s; 
     if (cfg->stubborn) {
       if (!s->status) {
-        if (!s->last) s->last = time(NULL);
-        else if (time(NULL) - s->last >= cfg->check) { _check_server(cfg, s); if (s->status) return s; }
+        if (!s->last) s->last = now;
+        else if (now - s->last >= cfg->check) { if (_check_server(cfg, s)) return s; }
       }
       return NULL;
     }
   }
 
   do {
-    cfg->cs %= cfg->si;
-    s = &cfg->servers[cfg->cs];
-    cfg->cs++;
+    cfg->cs %= cfg->si; s = &cfg->servers[cfg->cs]; cfg->cs++;
     if (!s->status) {
-      if (!s->last) s->last = time(NULL);
-      else { if (!now) now = time(NULL); if (now - s->last >= cfg->check) _check_server(cfg, s); }
+      if (!s->last) s->last = now;
+      else { if (now - s->last >= cfg->check) _check_server(cfg, s); }
     }
     if (!s->status || (s->max && s->num + 1 > s->max) ) s = NULL;
   } while (!s && cfg->cs != i);
   return s;
 }
  
-static int _server(struct connection *c)
+static int _server(struct connection *c, short event)
 {
   struct cfg *cfg = c->cfg;
   struct connection *cn = NULL;
@@ -275,14 +272,15 @@ static int _server(struct connection *c)
   }
   if (!c->server || (!cfg->rr && !c->client) || fd < 0) return -1;
   if (!cfg->rr && !c->client->server) { c->client->server = c->server; c->client->last = time(NULL); }
-
   c->server->num++;
 #ifdef RLB_DEBUG
   {
-    char h[64]; struct sockaddr *sa = &c->sa;
-    if (getnameinfo(sa, sizeof(*sa), h, sizeof(h), NULL, 0, NI_NUMERICHOST) != 0) *h = 0;
-    RLOG("== %s - CONNECT fd=%d (ip=%s num=%d)",
-            c->scope == RLB_CLIENT ? "« CLIENT" : "» SERVER", fd, *h ? h : "UNKNOWN", c->server->num);
+    char cl[64], h[64], p[64]; struct sockaddr *sa = &c->sa;
+    if (getnameinfo(sa, sizeof(*sa), cl, sizeof(cl), NULL, 0, NI_NUMERICHOST)) *cl = 0;
+    sa = c->server->ai->ai_addr;
+    if (getnameinfo(sa, sizeof(*sa), h, sizeof(h), p, sizeof(p), NI_NUMERICHOST | NI_NUMERICSERV)) *h = *p = 0;
+    RLOG("== %s - CONNECT fd=%d (client=%s) (server=%s:%s num=%d)",
+            c->scope == RLB_CLIENT ? "« CLIENT" : "» SERVER", fd, cl, h, p, c->server->num);
   }
 #endif
   cn = &cfg->conn[fd];
@@ -291,19 +289,19 @@ static int _server(struct connection *c)
   cn->ev.ev_fd = -1; cn->closed = 0;
   cn->fd = c->od = fd; cn->od = c->fd;
   cn->server = NULL; cn->client = NULL;
-  event_set(&cn->ev, fd, EV_READ, _event, cn);
+  event_set(&cn->ev, fd, event, _event, cn);
   return event_add(&cn->ev, &cfg->to);
 }
 
-static void _check_server(struct cfg *cfg, struct server *s)
+static int _check_server(struct cfg *cfg, struct server *s)
 {
   int fd, r;
-  struct addrinfo *a = s->ai;
-  if ( (fd = _socket(cfg, a, 0, 1)) < 0) return;
-  do { r = connect(fd, a->ai_addr, a->ai_addrlen); } while (r == -1 && errno == EINTR);
+  if ( (fd = _socket(cfg, s->ai, 0, 1)) < 0) return 0;
+  do { r = connect(fd, s->ai->ai_addr, s->ai->ai_addrlen); } while (r == -1 && errno == EINTR);
   _closefd(fd);
   if (!r) { s->status = 1; s->last = 0; s->num = 0; }
   else    { s->status = 0; s->last = time(NULL); }
+  return s->status;
 }
 
 static void _client(const int s, short event, void *config)
@@ -333,7 +331,7 @@ static void _client(const int s, short event, void *config)
 #ifdef RLB_SO
   if (!cfg->delay && cfg->gs) cfg->gs(cn);
 #endif
-  if (!cfg->delay) if (_server(cn) < 0) return _close(cfg, cn);
+  if (!cfg->delay) if (_server(cn, EV_READ) < 0) return _close(cfg, cn);
   event_set(&cn->ev, cn->fd, EV_READ, _event, cn);
   event_add(&cn->ev, &cfg->to);
 }
@@ -392,11 +390,11 @@ static int _startup(struct cfg *cfg)
 
   for (i = 0; i < cfg->max; i++) {
     cfg->conn[i].fd = cfg->conn[i].od = -1;
+    cfg->conn[i].cfg      = cfg;
+    cfg->conn[i].scope    = RLB_NONE;
     if (i == cfg->fd) continue;
     if ( !(cfg->conn[i].b = malloc(cfg->bufsize + 1)) ) return -1;
     cfg->conn[i].bs       = cfg->bufsize;
-    cfg->conn[i].cfg      = cfg;
-    cfg->conn[i].scope    = RLB_NONE;
 #ifdef RLB_SO
     cfg->conn[i].so_server = NULL;
 #endif
@@ -405,7 +403,7 @@ static int _startup(struct cfg *cfg)
   if (cfg->in) if (cfg->in(cfg) < 0) return -1;
 #endif
 #ifdef RLB_DEBUG
-  _rlb_fp = fopen("rlb.debug", "w+");
+  if (cfg->daemon) _rlb_fp = fopen("rlb.debug", "w+"); else _rlb_fp = stdout;
 #endif
   return listen(cfg->fd, SOMAXCONN);
 }
@@ -566,7 +564,7 @@ static void _usage(void)
 #ifdef RLB_SO
   fprintf(stderr, "          [-o shared object]\n");
 #endif
-  exit(-1);
+  exit(EXIT_FAILURE);
 }
 
 #ifdef RLB_DEBUG
