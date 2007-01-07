@@ -6,8 +6,8 @@
 #include <ctype.h>
 
 /**
- * This shared object filter is intended to be used with rlb as a front-end
- * to a cluster of web servers.
+ * This shared object filter is intended to be used with rlb as a 
+ * front-end to a cluster of web servers.
  */
 
 
@@ -43,7 +43,7 @@
  * redirected to this server.
  * Comment the first line out if you don't want this
  */
-//#define RLB_IMAGE_SERVER  "192.168.10.102"
+#define RLB_IMAGE_SERVER  "192.168.10.102"
 #define RLB_IMAGE_PORT    "82"        /**< Port on image server */
 #define RLB_IMAGE_STRING  "thumbs"    /**< What to look for in the URL */
 
@@ -67,7 +67,7 @@
  * Uncomment this to see header information in both directions, but 
  * you need to run rlb with the -f option.
  */
-// #define RLB_FILTER_DEBUG
+//#define RLB_FILTER_DEBUG
 
 
 /****************************************
@@ -151,14 +151,14 @@ int rlb_init(struct cfg *cfg)
 void _add_server(struct rlbfilter *rlbf, char *host, char *port)
 {
   struct server *sv = NULL, *s = NULL;
-  int r, fd;
+  int r, rc, fd;
   struct addrinfo *a;
   if ( !(sv = realloc(rlbf->s, (rlbf->si + 1) * sizeof(struct server))) ) return;
   rlbf->s = sv; s = &sv[rlbf->si]; memset(s, 0, sizeof(struct server));
   if ( !(s->ai = a = _get_addrinfo(host, port)) ) return; rlbf->si++;
   if ( (fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol)) < 0) return;
   do { r = connect(fd, a->ai_addr, a->ai_addrlen); } while (r == -1 && errno == EINTR);
-  shutdown(fd, 2); close(fd);
+  do { rc = close(fd); } while (rc == -1 && errno == EINTR);
   if (!r) { s->status = 1; s->last = 0; s->num = 0; }
   else    { s->status = 0; s->last = time(NULL); }
 }
@@ -246,7 +246,7 @@ int rlb_filter(struct connection *c, int r)
 #ifdef RLB_FILTER_DEBUG
       /* Print out any header data */
       *(c->b + c->pos + c->len) = 0;
-      printf("\n------\n%s------\n", c->b + c->pos);
+      printf("\n------\n%s", c->b + c->pos);
       fflush(stdout);
 #endif
 
@@ -495,7 +495,7 @@ _strnstr(char *str, char *find, int hl)
  * This could get called:
  *  - If there is no 'delay': after the client connects, before connecting to the server
  *  - With 'delay': After the first read from the client, after any filter, before connecting to the server
- */
+
 void rlb_get_server(struct connection *c)
 {
   if (c->so_server == NULL) {
@@ -504,6 +504,7 @@ void rlb_get_server(struct connection *c)
     if (rlbf && rlbf->s) c->so_server = &rlbf->s[0];
   }
 }
+ */
 
 /**
  * Do what RLB does
