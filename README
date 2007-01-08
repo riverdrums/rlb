@@ -1,7 +1,7 @@
 $Id$
 
 RLB v0.5  Jason Armstrong <ja@riverdrums.com>
-Copyright (c) 2006 Riverdrums
+Copyright (c) 2006-2007 Riverdrums
 http://rlb.sourceforge.net
 
 LICENSE
@@ -23,7 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 PREFACE
 
-RLB is a no-frills TCP load balancer, aimed at clarity and efficiency.
+RLB is a TCP load balancer aimed at clarity and efficiency.
 
 
 REQUIREMENTS
@@ -59,20 +59,20 @@ Build options for other architectures: please send to the author.
 
 USAGE
 
-$ rlb -p port [-b addr] [-B addr] -h host:service[:max] [-h host:service[:max] ...] [-m max] [-t timeout] [-c check interval] [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients] [-r] [-S] [-d] [-f] [-o shared object]
+$ rlb -p port -h host:service[:max] [-h host:service[:max] ...] [-b addr] [-B addr] [-m max] [-t timeout] [-c check interval] [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients] [-r] [-S] [-d] [-f] [-o shared object]
 
 
 OPTIONS
 
   -p  port  Listen on this port
-  -b  addr  Bind to this interface when listening
-  -B  addr  Bind to this interface when connecting to backend servers
   -h  host:service[:max]
             Specify a backend server and service. The 'max' parameter, if
             specified, is the maximum number of simultaneous connections
             allowed to that server.
             Service can be a port number (80) or service name (www).
             This option can be specified multiple times.
+  -b  addr  Bind to this interface when listening
+  -B  addr  Bind to this interface when connecting to backend servers
   -m  max   Maximum number of accepted connections to the load balancer. The
             default is to use the system limit (RLIMIT_NOFILE). The minimum
             value for this field is enforced to 8. This is a file
@@ -143,7 +143,7 @@ client IP address (to backend servers, all requests come from the load
 balancer's IP address). You will need to modify a few variables at the
 top of the file to get it to work for your setup.
 
-1. int  rlb_init(struct cfg *);
+1. int rlb_init(struct cfg *);
 
   This function is called on startup. It takes the configuration
   structure as a parameter. It is called after everything has been
@@ -161,7 +161,7 @@ top of the file to get it to work for your setup.
   Example:
 
 int rlb_init(struct cfg *cfg) {
-  FILE *f = fopen("/tmp/rlb_filter.log", "a+");
+  FILE *f = fopen("rlb_filter.log", "a+");
   if (f) cfg->userdata = (FILE *) f;
   return 0;
 }
@@ -182,7 +182,7 @@ void rlb_cleanup(struct cfg *cfg) {
 }
 
 
-3. int  rlb_filter(struct connection *, int);
+3. int rlb_filter(struct connection *, int);
 
   This is the most useful function. It is called after every data read,
   in both directions. It is passed the connection data structure, where
@@ -279,6 +279,7 @@ TODO
 2. Reload on the fly without losing any current connections
 3. Re-select server after first read error (non-blocking connect error)
 4. Finalise the rlb_get_server() API interface
+5. Filter chains
 
 
 CREDITS
@@ -294,6 +295,8 @@ programs, including:
  - Pound by Robert Segall     http://www.apsis.ch/pound
  - Netcat                     http://netcat.sourceforge.net
  - proxy_load_balancer        http://httpd.apache.org/docs/2.2/mod/mod_proxy_balancer.html
+
+Thanks.
 
 
 FEEDBACK
