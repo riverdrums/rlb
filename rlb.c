@@ -142,7 +142,7 @@ static void _write(const int fd, struct connection *c)
   if (co->nowrite == 0) {
     if (c->scope == RLB_SERVER && ((co->so_server && co->server != co->so_server) || co->reconnect) ) {
       _reset(cfg, c); c->od = -1;     /* XXX What if there is data (c->len) */
-      if (co->server) { co->server->num--; co->server = NULL; }
+      if (co->server) { if (co->connected) co->server->num--; co->server = NULL; co->connected = 0; }
       if (_server(co, EV_WRITE) < 0) _close(cfg, co);
       return;
     }
@@ -196,7 +196,7 @@ static void _reset(struct cfg *cfg, struct connection *c)
   if (cfg->cl) cfg->cl(c);
 #endif
   if (!c->closed) _reset_conn(c);
-  if (c->server) { c->server->num--; c->server = NULL; }
+  if (c->server) { if (c->connected) c->server->num--; c->server = NULL; c->connected = 0; }
   if (c->client) { c->client->last = time(NULL); c->client = NULL; }
   if (EVENT_FD((&c->ev)) >= 0) { event_del(&c->ev); c->ev.ev_fd = -1; }
 }
@@ -267,7 +267,7 @@ static int _server(struct connection *c, short event)
   }
   if (!c->server || (!cfg->rr && !c->client) || fd < 0) return -1;
   if (!cfg->rr && !c->client->server) { c->client->server = c->server; c->client->last = time(NULL); }
-  c->server->num++;
+  c->server->num++; c->connected = 1;
 #ifdef RLB_DEBUG
   {
     char cl[64], h[64], p[64]; struct sockaddr *sa = &c->sa;
@@ -293,7 +293,7 @@ static int _check_server(struct cfg *cfg, struct server *s)
   if ( (fd = _socket(cfg, s->ai, 0, 1)) < 0) return 0;
   do { r = connect(fd, s->ai->ai_addr, s->ai->ai_addrlen); } while (r == -1 && errno == EINTR);
   _closefd(fd);
-  if (!r) { s->status = 1; s->last = 0; s->num = 0; }
+  if (!r) { s->status = 1; s->last = 0; }
   else    { s->status = 0; s->last = time(NULL); }
   return s->status;
 }
@@ -313,7 +313,7 @@ static void _client(const int s, short event, void *config)
   cn->scope = RLB_CLIENT;
   cn->len = cn->pos = (size_t) 0U;
   cn->fd = fd; cn->od = cn->ev.ev_fd = -1;
-  cn->closed = 0; memcpy(&cn->sa, &sa, l);
+  cn->closed = cn->connected = 0; memcpy(&cn->sa, &sa, l);
   RLOG("++ » CLIENT - CONNECT fd=%d", cn->fd);
 
   if (!cfg->rr) {
