@@ -1,4 +1,4 @@
-/* rlb.h Jason Armstrong <ja@riverdrums.com> © 2006 RIVERDRUMS
+/* rlb.h Jason Armstrong <ja@riverdrums.com> © 2006-2007 RIVERDRUMS
  * $Id$ */
 
 #ifndef _RLB_H_
@@ -63,7 +63,7 @@ struct cfg {
   struct connection *conn;  /**< Array of 'max' connections */
   struct server *servers;   /**< Array of 'si' servers */
   struct client *clients;   /**< Array of 'ci' clients */
-  char *jail, *user;        /**< chroot() jail, run as 'user' */
+  char *jail, *user;        /**< chroot() jail / Run as 'user' */
   struct timeval to;        /**< Timeout value (seconds) */
   char host[64], port[8];   /**< Listen host and port */
   struct sockaddr oaddr;    /**< Bind to this address on 'connect()' */
