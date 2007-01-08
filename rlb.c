@@ -1,4 +1,4 @@
-/* rlb.c Jason Armstrong <ja@riverdrums.com> © 2006 RIVERDRUMS
+/* rlb.c Jason Armstrong <ja@riverdrums.com> © 2006-2007 RIVERDRUMS
  * $ gcc [-DRLB_SO] -Wall -02 -o rlb rlb.c -levent (-lnsl -lsocket) 
  * $Id$ */
 
@@ -489,7 +489,6 @@ static int _sockopt(const int fd, int nb)
 #ifdef SO_REUSEADDR
   ret |= setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 #endif
-
   if (nb) ret |= fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
   return ret;
 }
@@ -563,7 +562,7 @@ static void _stat(int signo)
   struct cfg *cfg = _gcfg;
   char last[32], *cp, h[32], p[8];
   struct in_addr in; 
-  RLOG(" **** USR1 ****");
+  RLOG("**** STATUS ****");
   RLOG("listen => %d", cfg->fd);
   RLOG("rlb_fp => %d", fileno(_rlb_fp));
   for (i = 0; i < cfg->max; i++) {
@@ -587,7 +586,7 @@ static void _stat(int signo)
     struct client *cl = &cfg->clients[i];
     if ( (in.s_addr = cl->id) ) {
       snprintf(last, sizeof(last), "%s", ctime(&cl->last)); if ( (cp = strchr(last, '\n')) ) *cp = 0;
-      RLOG(" -- CLIENT - ip=%s server=%p last='%s'", inet_ntoa(in), cl->server, last);
+      RLOG(" 00 CLIENT - (%p) last='%s' ip=%s", cl->server, last, inet_ntoa(in));
     }
   }
 #endif
