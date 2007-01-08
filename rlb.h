@@ -23,36 +23,37 @@
 #include <event.h>
 
 struct client {
-  unsigned int id;        /**< Client IP address */
-  struct server *server;  /**< Who the client connected to last time */
-  time_t last;            /**< Last operation to that server */
+  unsigned int id;          /**< Client IP address */
+  struct server *server;    /**< Who the client connected to last time */
+  time_t last;              /**< Last operation to that server */
 };
 
 struct server {
-  int weight, status, num, max;
-  struct addrinfo *ai;
-  time_t last;            /**< Time of last failed connection */
+  int status, num, max;     /**< Working / number of connections / max allowed */
+  struct addrinfo *ai;      /**< Socket address structure */
+  time_t last;              /**< Time of last failed connection */
 };
 
 typedef enum { RLB_NONE, RLB_CLIENT, RLB_SERVER } rlb_scope;
 
 struct connection {
-  int fd, od, bs;         /**< Socket, other socket, buffer size */
-  char *b;                /**< Buffer */
-  unsigned int nr, nw;    /**< Read and write totals for connection */
-  size_t len, pos;        /**< Length and position in buffer of data */
-  struct event ev;        /**< Event (libevent) */
-  struct server *server;  /**< RLB_CLIENT only: which server is backend */
-  struct client *client;  /**< Pointer to previous connection information */
-  struct cfg *cfg;        /**< Pointer to global configuration structure */
-  rlb_scope scope;        /**< CLIENT=outside connection SERVER=backend server */
-  struct sockaddr sa;     /**< Accepted client address */
-  int closed;             /**< Socket is closed, but there is still data to write */
+  int fd, od, bs;           /**< Socket, other socket, buffer size */
+  char *b;                  /**< Data buffer */
+  unsigned int nr, nw;      /**< Read and write totals for connection */
+  size_t len, pos;          /**< Length and position in buffer of data */
+  struct event ev;          /**< Event structure for libevent */
+  struct server *server;    /**< RLB_CLIENT only: which server is backend */
+  struct client *client;    /**< Pointer to previous connection information */
+  struct cfg *cfg;          /**< Pointer to global configuration structure */
+  rlb_scope scope;          /**< CLIENT=outside connection SERVER=backend server */
+  struct sockaddr sa;       /**< Accepted client address */
+  int closed;               /**< Socket is closed, but there is still data to write */
+  int connected;            /**< RLB_CLIENT only: whether we are connected to the server */
 #ifdef RLB_SO
-  struct server *so_server;
-  int reconnect;          /**< Reconnect to another server during a connection */
-  int nowrite;            /**< Don't write data when this is set */
-  void *userdata;         /**< Persistent across a connection */
+  struct server *so_server; /**< Pointer to our own defined server to connect to */
+  int reconnect;            /**< Reconnect to another server during a connection */
+  int nowrite;              /**< Don't write data when this is set */
+  void *userdata;           /**< Persistent across a connection */
 #endif
 };
 
