@@ -170,7 +170,7 @@ static void _write(const int fd, struct connection *c)
 static void _event_set(struct connection *c, short event)
 {
   if (!c) return;
-  if (EVENT_FD((&c->ev)) >= 0) event_del(&c->ev);
+  event_del(&c->ev);
   event_set(&c->ev, c->fd, event, _event, c);
   event_add(&c->ev, &c->cfg->to);
 }
