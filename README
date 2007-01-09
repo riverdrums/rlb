@@ -210,7 +210,8 @@ int rlb_filter(struct connection *c, int r) {
 
   Some things to note:
 
-  a) All variables are incremented before this function is called.
+  a) All variables are incremented before this function is called (ie
+     totals, buffer lengths etc).
   b) The second parameter is only the number of bytes in the last call
      to read(). 
   c) To see if this is the very first read on a connection:
@@ -271,6 +272,16 @@ result in the program allocating > 16 Mb of memory. If this is an issue,
 then you need to either reduce the maximum number of connections (via
 the -m max flag) or the size of the allocated buffers (via the -s size
 flag), or both.
+
+
+NOTE ON CODING STYLE
+
+This project has also been an exercise in style. The rlb.c file has the
+intention of being as compressed, concise and explosive as possible. It
+is not commented, and is dense and spiky.
+
+The example filter file (rlb_http_filter.c) is the opposite, expansive
+and well-commented.
 
 
 TODO
