@@ -16,7 +16,7 @@ static int _load_so(struct cfg *cfg, const char *path);
 #ifdef RLB_DEBUG
 FILE *_rlb_fp = NULL;
 # define RLOG(f,...) do { if (_rlb_fp) { fprintf(_rlb_fp, "[%s:%d] " f "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__); fflush(_rlb_fp); } } while(0)
-# define SCOPE  (c->scope == RLB_CLIENT) ? " 0 CLIENT" : (c->scope == RLB_SERVER) ? " o SERVER" : " +  NONE "
+# define SCOPE  (c->scope == RLB_CLIENT) ? " < CLIENT" : (c->scope == RLB_SERVER) ? " > SERVER" : " +  NONE "
 #else
 # define RLOG(f,...)
 # define SCOPE ""
@@ -182,18 +182,18 @@ static void _close(struct cfg *cfg, struct connection *c)
 static void _reset(struct cfg *cfg, struct connection *c)
 {
 #ifdef RLB_DEBUG
-  if (c->fd >= 0) RLOG("-- %s - CLOSE fd=%d (pos=%d len=%d bs=%d) (nr=%u nw=%u cl=%d)",
-      SCOPE, c->fd, c->pos, c->len, c->bs, c->nr, c->nw, c->closed);
+  if (c->fd >= 0) RLOG("-- %s - CLOSE fd=%d od=%d (pos=%d len=%d bs=%d) (nr=%u nw=%u cl=%d)",
+      SCOPE, c->fd, c->od, c->pos, c->len, c->bs, c->nr, c->nw, c->closed);
 #endif
   if (c->len && c->od >= 0) c->closed = 1;
-  else if (c->closed) return _reset_conn(c);
+  else if (c->closed) { event_del(&c->ev); return _reset_conn(c); }
 #ifdef RLB_SO
   if (cfg->cl) cfg->cl(c);
 #endif
   if (!c->closed) _reset_conn(c);
   if (c->server) { if (c->connected) c->server->num--; c->server = NULL; c->connected = 0; }
   if (c->client) { c->client->last = time(NULL); c->client = NULL; }
-  event_del(&c->ev);
+  c->closed ? event_add(&c->ev, &cfg->to) : event_del(&c->ev);
 }
 
 static void _reset_conn(struct connection *c)
@@ -385,7 +385,7 @@ static int _startup(struct cfg *cfg)
   if (cfg->in) if (cfg->in(cfg) < 0) return -1;
 #endif
 #ifdef RLB_DEBUG
-  if (cfg->daemon) _rlb_fp = fopen("rlb.debug", "w+"); else _rlb_fp = stdout;
+  if (cfg->daemon) { char f[32]; snprintf(f, 32, "rlb.dbg.%u", getpid()); _rlb_fp = fopen(f, "w+"); } else _rlb_fp = stdout;
 #endif
   return listen(cfg->fd, SOMAXCONN);
 }
@@ -482,9 +482,9 @@ static int _sockopt(const int fd, int nb)
   return ret;
 }
 
+#ifdef RLB_SO
 static int _load_so(struct cfg *cfg, const char *path)
 {
-#ifdef RLB_SO
   dlerror();
   if ( !(cfg->h = dlopen(path, RTLD_GLOBAL | RTLD_NOW)) ) { fprintf(stderr, dlerror()); return -1; }
   cfg->fl = dlsym(cfg->h, "rlb_filter");
@@ -532,7 +532,7 @@ static int _cmdline(struct cfg *cfg, int ac, char *av[])
 
 static void _usage(void)
 {
-  fprintf(stderr, "\nrlb %s Copyright © 2006 RIVERDRUMS\n\n", _VERSION);
+  fprintf(stderr, "\nrlb %s Copyright © 2006-2007 RIVERDRUMS\n\n", _VERSION);
   fprintf(stderr, "usage: rlb -p port -h host:service[:max] [-h host:service[:max] ...]\n"
                   "          [-b address] [-B address] [-m max] [-t timeout] [-c check interval]\n"
                   "          [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients to track]\n"
@@ -540,23 +540,32 @@ static void _usage(void)
 #ifdef RLB_SO
   fprintf(stderr, "          [-o shared object]\n");
 #endif
-  exit(EXIT_FAILURE);
+  fprintf(stderr, "\n"); exit(EXIT_SUCCESS);
 }
 
 static void _stat(int signo)
 {
-#ifdef RLB_DEBUG
   int i;
   struct cfg *cfg = _gcfg;
   char last[32], *cp, h[32], p[8];
   struct in_addr in; 
+#ifndef RLB_DEBUG
+  char statusfile[32];
+  FILE *_rlb_fp;
+  snprintf(statusfile, 32, "rlb.status.%u", getpid());
+  _rlb_fp = fopen(statusfile, "w+");
+# undef RLOG
+# undef SCOPE
+# define RLOG(f,...) do { if (_rlb_fp) { fprintf(_rlb_fp, f "\n", ##__VA_ARGS__); fflush(_rlb_fp); } } while(0)
+# define SCOPE  (c->scope == RLB_CLIENT) ? " < CLIENT" : (c->scope == RLB_SERVER) ? " > SERVER" : " +  NONE "
+#endif
   RLOG("**** STATUS ****");
   RLOG("listen => %d rlb_fp => %d", cfg->fd, fileno(_rlb_fp));
   for (i = 0; i < cfg->max; i++) {
     struct connection *c = &cfg->conn[i];
     if (c->fd >= 0 || c->od >= 0) {
-      RLOG(" ++ %s - [%4d] STATUS fd=%d od=%d (pos=%d len=%d nr=%u nw=%u cl=%d)",
-            SCOPE, i, c->fd, c->od, c->pos, c->len, c->nr, c->nw, c->closed);
+      RLOG(" ++ %s - [%4d] STATUS fd=%d od=%d ev=%d (pos=%d len=%d nr=%u nw=%u cl=%d)",
+            SCOPE, i, c->fd, c->od, c->ev.ev_fd, c->pos, c->len, c->nr, c->nw, c->closed);
     }
   }
   for (i = 0; i < cfg->si; i++) {
@@ -573,6 +582,12 @@ static void _stat(int signo)
       RLOG(" 00 CLIENT - (%p) last='%s' ip=%s", cl->server, last, inet_ntoa(in));
     }
   }
+#ifndef RLB_DEBUG
+if (_rlb_fp) fclose(_rlb_fp);
+# undef RLOG
+# undef SCOPE
+# define RLOG(f,...)
+# define SCOPE ""
 #endif
   signal(SIGUSR1, _stat);
 }
