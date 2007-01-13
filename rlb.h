@@ -81,7 +81,6 @@ struct cfg {
   struct sockaddr oaddr;    /**< Bind to this address on 'connect()' */
   size_t olen;
 #ifdef RLB_SO
-  void *userdata;           /**< Persistent while rlb is running */
   struct filter *filters;   /**< Array of 'fi' filters */
   int fi, ini, fri, gsi, fli, cli, cf;
 #endif
