@@ -30,9 +30,9 @@ static int  _sockopt(const int fd, int nb);
 static int  _parse_server(struct cfg *cfg, char *str);
 static void _event(const int fd, short event, void *c);
 static int  _lookup_oaddr(struct cfg *cfg, char *outb);
-static void _client(const int s, short event, void *ev);
 static void _event_set(struct connection *c, short event);
 static void _reset(struct cfg *cfg, struct connection *c);
+static void _client(const int s, short event, void *config);
 static int  _check_server(struct cfg *cfg, struct server *s);
 static int  _socket(struct cfg *cfg, struct addrinfo *a, int nb, int o);
 static struct server * _get_server(struct cfg *cfg, struct connection *c);
@@ -46,6 +46,7 @@ static void _read(const int fd, struct connection *c);
 static void _reset_conn(struct connection *c);
 static void _cleanup(struct cfg *cfg);
 static int  _bind(struct cfg *cfg);
+static void _check(int signo);
 static int  _closefd(int fd);
 static void _sig(int signo);
 
@@ -63,7 +64,7 @@ int main(int argc, char *argv[]) {
   }
 
   signal(SIGINT, _sig); signal(SIGTERM, _sig); signal(SIGQUIT, _sig);
-  signal(SIGUSR1, _stat);
+  signal(SIGUSR1, _stat); signal(SIGUSR2, _check);
 
   event_init();
   event_set(&ev, cfg.fd, EV_READ | EV_PERSIST, _client, &cfg);
@@ -89,8 +90,12 @@ static void _cleanup(struct cfg *cfg)
   if (cfg->clients) { free(cfg->clients); cfg->clients = NULL; } cfg->ci  = 0;
   if (cfg->conn)    { free(cfg->conn);    cfg->conn    = NULL; } cfg->max = 0;
 #ifdef RLB_SO
-  if (cfg->fr) cfg->fr(cfg);
-  if (cfg->h)  dlclose(cfg->h);
+  for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
+    struct filter *fl = &cfg->filters[cfg->cf];
+    if (fl->fr) fl->fr(cfg, &(fl->userdata));
+    if (fl->h) dlclose(fl->h);
+  }
+  if (cfg->filters) { free(cfg->filters); cfg->filters = NULL; } cfg->fi  = 0;
 #endif
 }
 
@@ -113,14 +118,27 @@ static void _read(const int fd, struct connection *c)
   if (c->od >= 0) co = &cfg->conn[c->od];
   do { r = read(fd, c->b + c->len, c->bs - c->len); } while (r == -1 && errno == EINTR);
   RLOG("%s - R: %d fd=%d (pos=%d len=%d)", SCOPE, r, fd, c->pos, c->len);
-  if (r <= 0) return _close(cfg, c);
+  if (r <= 0) {
+    if (r < 0 && c->scope == RLB_SERVER) co->server->status = 0; 
+    return _close(cfg, c);
+  }
   c->nr += r; c->len += r;
 #ifdef RLB_SO
-  if (cfg->fl) if (cfg->fl(c, r) < 0) return _close(cfg, c);
+  if (cfg->fli) {
+    for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
+      struct filter *fl = &cfg->filters[cfg->cf];
+      if (fl->fl) if (fl->fl(c, r, fl->userdata) < 0) return _close(cfg, c);
+    }
+  }
 #endif
   if (c->nr - r == 0 && c->scope == RLB_CLIENT && cfg->delay) {
 #ifdef RLB_SO
-    if (cfg->gs) cfg->gs(c);
+    if (cfg->gsi) {
+      for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
+        struct filter *fl = &cfg->filters[cfg->cf];
+        if (fl->gs) fl->gs(c, fl->userdata);
+      }
+    }
 #endif
     if (_server(c, EV_WRITE) < 0) return _close(cfg, c); 
   } else _event_set(co, EV_WRITE);
@@ -186,21 +204,25 @@ static void _reset(struct cfg *cfg, struct connection *c)
       SCOPE, c->fd, c->od, c->pos, c->len, c->bs, c->nr, c->nw, c->closed);
 #endif
   if (c->len && c->od >= 0) c->closed = 1;
-  else if (c->closed) { event_del(&c->ev); return _reset_conn(c); }
+  else if (c->closed) return _reset_conn(c);
 #ifdef RLB_SO
-  if (cfg->cl) cfg->cl(c);
+  if (cfg->cli) {
+    for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
+      struct filter *fl = &cfg->filters[cfg->cf];
+      if (fl->cl) fl->cl(c, fl->userdata);
+    }
+  }
 #endif
-  if (!c->closed) _reset_conn(c);
-  if (c->server) { if (c->connected) c->server->num--; c->server = NULL; c->connected = 0; }
-  if (c->client) { c->client->last = time(NULL); c->client = NULL; }
-  c->closed ? event_add(&c->ev, &cfg->to) : event_del(&c->ev);
+  c->closed ? event_add(&c->ev, &cfg->to) : _reset_conn(c);
 }
 
 static void _reset_conn(struct connection *c)
 {
   if (c->fd >= 0) c->fd = _closefd(c->fd);
-  c->len = c->pos = c->nr = c->nw = c->closed = 0;
-  c->scope = RLB_NONE;
+  c->len = c->pos = c->nr = c->nw = c->closed = 0; c->scope = RLB_NONE;
+  if (c->server) { if (c->connected) c->server->num--; c->server = NULL; c->connected = 0; }
+  if (c->client) { c->client->last = time(NULL); c->client = NULL; }
+  event_del(&c->ev);
 }
 
 static struct server * _get_server(struct cfg *cfg, struct connection *c)
@@ -234,7 +256,7 @@ static struct server * _get_server(struct cfg *cfg, struct connection *c)
   }
 
   do {
-    cfg->cs %= cfg->si; s = &cfg->servers[cfg->cs]; cfg->cs++;
+    cfg->cs++; cfg->cs %= cfg->si; s = &cfg->servers[cfg->cs];
     if (!s->status) {
       if (!s->last) s->last = now;
       else if (now - s->last >= cfg->check) _check_server(cfg, s);
@@ -297,7 +319,7 @@ static void _client(const int s, short event, void *config)
   struct cfg *cfg = config;
   struct connection *cn = NULL;
 
-  if ( (fd = accept(s, &sa, &l)) < 0)  return;
+  if ( (fd = accept(s, &sa, &l)) < 0) return;
   if (fd >= cfg->max || _sockopt(fd, 1) < 0) { _closefd(fd); return; }
 
   cn = &cfg->conn[fd];
@@ -312,7 +334,12 @@ static void _client(const int s, short event, void *config)
     cn->client = _find_client(cfg, si->sin_addr.s_addr);
   }
 #ifdef RLB_SO
-  if (!cfg->delay && cfg->gs) cfg->gs(cn);
+  if (!cfg->delay && cfg->gsi) {
+    for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
+      struct filter *fl = &cfg->filters[cfg->cf];
+      if (fl->gs) fl->gs(cn, fl->userdata);
+    }
+  }
 #endif
   if (!cfg->delay) if (_server(cn, EV_READ) < 0) return _close(cfg, cn);
   event_set(&cn->ev, cn->fd, EV_READ, _event, cn);
@@ -382,10 +409,14 @@ static int _startup(struct cfg *cfg)
 #endif
   }
 #ifdef RLB_SO
-  if (cfg->in) if (cfg->in(cfg) < 0) return -1;
+  for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
+    struct filter *fl = &cfg->filters[cfg->cf];
+    if (fl->in) if (fl->in(cfg, &(fl->userdata)) < 0) return -1;
+  }
 #endif
 #ifdef RLB_DEBUG
   if (cfg->daemon) { char f[32]; snprintf(f, 32, "rlb.dbg.%u", getpid()); _rlb_fp = fopen(f, "w+"); } else _rlb_fp = stdout;
+  RLOG("Listening on port %d", cfg->fd);
 #endif
   return listen(cfg->fd, SOMAXCONN);
 }
@@ -407,15 +438,16 @@ static int _parse_server(struct cfg *cfg, char *str)
   char *p = NULL, *cp = NULL;
   struct server *sv = NULL, *s = NULL;
 
-  if (!*str || !(cp = strchr(str, ':'))) return -1;
-  if ( !*(cp + 1) ) return -1; *cp = 0;
+  if (!*str) return -1;
+  if ( !(cp = strchr(str, ':')) ) { if (!*(cfg->port)) return -1; cp = cfg->port; }
+  else { if ( !*(cp + 1) ) return -1; *cp = 0; }
   if ( (p = strchr(cp + 1, ':')) ) *p = 0;
 
   if ( !(sv = realloc(cfg->servers, (cfg->si + 1) * sizeof(struct server))) ) return -1;
   cfg->servers = sv; s = &sv[cfg->si]; memset(s, 0, sizeof(struct server));
-  if ( !(s->ai = _get_addrinfo(str, cp + 1)) ) return -1; cfg->si++;
+  if ( !(s->ai = _get_addrinfo(str, *cp ? cp : cp + 1)) ) return -1; cfg->si++;
 
-  if (p) { *p++ = ':'; if (*p) s->max = atoi(p); } *cp = ':';
+  if (p) { *p++ = ':'; if (*p) s->max = atoi(p); } if (!*cp) *cp = ':';
   return _check_server(cfg, s);
 }
 
@@ -440,7 +472,7 @@ struct addrinfo * _get_addrinfo(char *h, char *p)
   hints.ai_protocol = 0;
 
   if ( (r = getaddrinfo(*h ? h : NULL, p, &hints, &res)) ) { 
-    fprintf(stderr, "%s - %s\n", *h ? h : "", gai_strerror(r)); 
+    fprintf(stderr, "%s:%s - %s\n", *h ? h : "", p, gai_strerror(r)); 
     if (res) freeaddrinfo(res);
     return NULL; 
   }
@@ -485,13 +517,15 @@ static int _sockopt(const int fd, int nb)
 #ifdef RLB_SO
 static int _load_so(struct cfg *cfg, const char *path)
 {
-  dlerror();
-  if ( !(cfg->h = dlopen(path, RTLD_GLOBAL | RTLD_NOW)) ) { fprintf(stderr, dlerror()); return -1; }
-  cfg->fl = dlsym(cfg->h, "rlb_filter");
-  cfg->cl = dlsym(cfg->h, "rlb_close");
-  cfg->gs = dlsym(cfg->h, "rlb_get_server");
-  cfg->in = dlsym(cfg->h, "rlb_init");
-  cfg->fr = dlsym(cfg->h, "rlb_cleanup");
+  struct filter *fl = NULL, *f = NULL;
+  if ( !(fl = realloc(cfg->filters, (cfg->fi + 1) * sizeof(struct filter))) ) return -1;
+  cfg->filters = fl; f = &fl[cfg->fi]; memset(f, 0, sizeof(struct filter)); cfg->fi++; dlerror();
+  if ( !(f->h = dlopen(path, RTLD_GLOBAL | RTLD_NOW)) ) { fprintf(stderr, dlerror()); return -1; }
+  if ( (f->fl = dlsym(f->h, "rlb_filter")) )      cfg->fli++;
+  if ( (f->cl = dlsym(f->h, "rlb_close")) )       cfg->cli++;
+  if ( (f->gs = dlsym(f->h, "rlb_get_server")) )  cfg->gsi++;
+  if ( (f->in = dlsym(f->h, "rlb_init")) )        cfg->ini++;
+  if ( (f->fr = dlsym(f->h, "rlb_cleanup")) )     cfg->fri++;
   return 0;
 }
 #endif
@@ -533,14 +567,21 @@ static int _cmdline(struct cfg *cfg, int ac, char *av[])
 static void _usage(void)
 {
   fprintf(stderr, "\nrlb %s Copyright © 2006-2007 RIVERDRUMS\n\n", _VERSION);
-  fprintf(stderr, "usage: rlb -p port -h host:service[:max] [-h host:service[:max] ...]\n"
+  fprintf(stderr, "usage: rlb -p port -h host[:service:max] [-h host[:service:max] ...]\n"
                   "          [-b address] [-B address] [-m max] [-t timeout] [-c check interval]\n"
                   "          [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients to track]\n"
                   "          [-r (round-robin)] [-S (stubborn)] [-d (delay)] [-f (foreground)]\n");
 #ifdef RLB_SO
-  fprintf(stderr, "          [-o shared object]\n");
+  fprintf(stderr, "          [-o shared object [-o shared object] ...]\n");
 #endif
   fprintf(stderr, "\n"); exit(EXIT_SUCCESS);
+}
+
+static void _check(int signo)
+{
+  int i;
+  for (i = 0; i < _gcfg->si; i++) _check_server(_gcfg, &_gcfg->servers[i]);
+  signal(SIGUSR2, _check);
 }
 
 static void _stat(int signo)
@@ -558,8 +599,9 @@ static void _stat(int signo)
 # undef SCOPE
 # define RLOG(f,...) do { if (_rlb_fp) { fprintf(_rlb_fp, f "\n", ##__VA_ARGS__); fflush(_rlb_fp); } } while(0)
 # define SCOPE  (c->scope == RLB_CLIENT) ? " < CLIENT" : (c->scope == RLB_SERVER) ? " > SERVER" : " +  NONE "
-#endif
+#else
   RLOG("**** STATUS ****");
+#endif
   RLOG("listen => %d rlb_fp => %d", cfg->fd, fileno(_rlb_fp));
   for (i = 0; i < cfg->max; i++) {
     struct connection *c = &cfg->conn[i];
