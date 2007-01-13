@@ -57,6 +57,18 @@ struct connection {
 #endif
 };
 
+#ifdef RLB_SO
+struct filter {
+  void *h;                                      /**< Handle to shared object */
+  void *userdata;                               /**< Persistent while rlb is running */
+  int  (*fl)(struct connection *, int, void *); /**< Filter               rlb_filter() */
+  void (*cl)(struct connection *, void *);      /**< Connection close     rlb_close() */
+  void (*gs)(struct connection *, void *);      /**< Custom choose server rlb_get_server() */
+  int  (*in)(struct cfg *, void **);            /**< Global init          rlb_init() */
+  void (*fr)(struct cfg *, void **);            /**< Global shutdown      rlb_cleanup() */
+};
+#endif
+
 struct cfg {
   int bufsize, si, cs, num, daemon, fd, check, max; 
   int ci, rr, stubborn, delay;
@@ -69,13 +81,9 @@ struct cfg {
   struct sockaddr oaddr;    /**< Bind to this address on 'connect()' */
   size_t olen;
 #ifdef RLB_SO
-  void *h;                                /**< Handle to shared object */
-  void *userdata;                         /**< Persistent while rlb is running */
-  int  (*fl)(struct connection *, int);   /**< Filter               rlb_filter() */
-  void (*cl)(struct connection *);        /**< Connection close     rlb_close() */
-  void (*gs)(struct connection *);        /**< Custom choose server rlb_get_server() */
-  int  (*in)(struct cfg *);               /**< Global init          rlb_init() */
-  void (*fr)(struct cfg *);               /**< Global shutdown      rlb_cleanup() */
+  void *userdata;           /**< Persistent while rlb is running */
+  struct filter *filters;   /**< Array of 'fi' filters */
+  int fi, ini, fri, gsi, fli, cli, cf;
 #endif
 };
 
