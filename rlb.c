@@ -37,13 +37,13 @@ static int  _check_server(struct cfg *cfg, struct server *s);
 static int  _socket(struct cfg *cfg, struct addrinfo *a, int nb, int o);
 static struct server * _get_server(struct cfg *cfg, struct connection *c);
 static struct client * _find_client(struct cfg *cfg, unsigned int addr);
-static void _reset_conn(struct cfg *cfg, struct connection *c);
 static int  _cmdline(struct cfg *cfg, int ac, char *av[]);
 static void _close(struct cfg *cfg, struct connection *c);
 static struct addrinfo * _get_addrinfo(char *h, char *p);
 static void _write(const int fd, struct connection *c);
 static int  _server(struct connection *c, short event);
 static void _read(const int fd, struct connection *c);
+static void _reset_conn(struct connection *c);
 static void _cleanup(struct cfg *cfg);
 static int  _bind(struct cfg *cfg);
 static void _check(int signo);
@@ -204,16 +204,16 @@ static void _reset(struct cfg *cfg, struct connection *c)
       SCOPE, c->fd, c->od, c->pos, c->len, c->bs, c->nr, c->nw, c->closed);
 #endif
   if (c->len && c->od >= 0) { event_del(&c->ev); c->closed++; }
-  else if (c->closed) return _reset_conn(cfg, c);
-  c->closed ? event_add(&cfg->conn[c->od].ev, &cfg->to) : _reset_conn(cfg, c);
+  else if (c->closed) return _reset_conn(c);
+  c->closed ? event_add(&cfg->conn[c->od].ev, &cfg->to) : _reset_conn(c);
 }
 
-static void _reset_conn(struct cfg *cfg, struct connection *c)
+static void _reset_conn(struct connection *c)
 {
 #ifdef RLB_SO
-  if (cfg->cli) {
-    for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
-      struct filter *fl = &cfg->filters[cfg->cf];
+  if (c->cfg->cli) {
+    for (c->cfg->cf = 0; c->cfg->cf < c->cfg->fi; c->cfg->cf++) {
+      struct filter *fl = &c->cfg->filters[c->cfg->cf];
       if (fl->cl) fl->cl(c, fl->userdata);
     }
   }
