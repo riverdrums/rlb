@@ -37,13 +37,13 @@ static int  _check_server(struct cfg *cfg, struct server *s);
 static int  _socket(struct cfg *cfg, struct addrinfo *a, int nb, int o);
 static struct server * _get_server(struct cfg *cfg, struct connection *c);
 static struct client * _find_client(struct cfg *cfg, unsigned int addr);
+static void _reset_conn(struct cfg *cfg, struct connection *c);
 static int  _cmdline(struct cfg *cfg, int ac, char *av[]);
 static void _close(struct cfg *cfg, struct connection *c);
 static struct addrinfo * _get_addrinfo(char *h, char *p);
 static void _write(const int fd, struct connection *c);
 static int  _server(struct connection *c, short event);
 static void _read(const int fd, struct connection *c);
-static void _reset_conn(struct connection *c);
 static void _cleanup(struct cfg *cfg);
 static int  _bind(struct cfg *cfg);
 static void _check(int signo);
@@ -203,8 +203,13 @@ static void _reset(struct cfg *cfg, struct connection *c)
   if (c->fd >= 0) RLOG("-- %s - CLOSE fd=%d od=%d (pos=%d len=%d bs=%d) (nr=%u nw=%u cl=%d)",
       SCOPE, c->fd, c->od, c->pos, c->len, c->bs, c->nr, c->nw, c->closed);
 #endif
-  if (c->len && c->od >= 0) c->closed = 1;
-  else if (c->closed) return _reset_conn(c);
+  if (c->len && c->od >= 0) { event_del(&c->ev); c->closed++; }
+  else if (c->closed) return _reset_conn(cfg, c);
+  c->closed ? event_add(&cfg->conn[c->od].ev, &cfg->to) : _reset_conn(cfg, c);
+}
+
+static void _reset_conn(struct cfg *cfg, struct connection *c)
+{
 #ifdef RLB_SO
   if (cfg->cli) {
     for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
@@ -213,11 +218,6 @@ static void _reset(struct cfg *cfg, struct connection *c)
     }
   }
 #endif
-  c->closed ? event_add(&c->ev, &cfg->to) : _reset_conn(c);
-}
-
-static void _reset_conn(struct connection *c)
-{
   if (c->fd >= 0) c->fd = _closefd(c->fd);
   c->len = c->pos = c->nr = c->nw = c->closed = 0; c->scope = RLB_NONE;
   if (c->server) { if (c->connected) c->server->num--; c->server = NULL; c->connected = 0; }
@@ -593,6 +593,7 @@ static void _stat(int signo)
 #ifndef RLB_DEBUG
   char statusfile[32];
   FILE *_rlb_fp;
+  if (signo != SIGUSR1) return;
   snprintf(statusfile, 32, "rlb.status.%u", getpid());
   _rlb_fp = fopen(statusfile, "w+");
 # undef RLOG
