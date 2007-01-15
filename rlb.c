@@ -115,6 +115,8 @@ static void _read(const int fd, struct connection *c)
   ssize_t r = 0;
 
   if (c->scope == RLB_SERVER && c->od < 0) return _close(cfg, c);
+  if (c->closed) { event_del(&c->ev); return; }
+  if (c->len == c->bs) return;
   if (c->od >= 0) co = &cfg->conn[c->od];
   do { r = read(fd, c->b + c->len, c->bs - c->len); } while (r == -1 && errno == EINTR);
   RLOG("%s - R: %d fd=%d (pos=%d len=%d)", SCOPE, r, fd, c->pos, c->len);
@@ -150,6 +152,7 @@ static void _write(const int fd, struct connection *c)
   struct connection *co = NULL;
   ssize_t r = 0;
 
+  if (c->closed) { event_del(&c->ev); return; }
   if (c->od < 0) return _close(c->cfg, c); co = &c->cfg->conn[c->od];
 #ifdef RLB_SO
   if (co->nowrite == 0) {
@@ -204,14 +207,13 @@ static void _reset(struct cfg *cfg, struct connection *c)
       SCOPE, c->fd, c->od, c->pos, c->len, c->bs, c->nr, c->nw, c->closed);
 #endif
   if (c->len && c->od >= 0) { event_del(&c->ev); c->closed++; }
-  else if (c->closed) return _reset_conn(c);
-  c->closed ? event_add(&cfg->conn[c->od].ev, &cfg->to) : _reset_conn(c);
+  else _reset_conn(c);
 }
 
 static void _reset_conn(struct connection *c)
 {
 #ifdef RLB_SO
-  if (c->cfg->cli) {
+  if (c->cfg && c->cfg->cli) {
     for (c->cfg->cf = 0; c->cfg->cf < c->cfg->fi; c->cfg->cf++) {
       struct filter *fl = &c->cfg->filters[c->cfg->cf];
       if (fl->cl) fl->cl(c, fl->userdata);
@@ -408,6 +410,7 @@ static int _startup(struct cfg *cfg)
     cfg->conn[i].so_server = NULL;
 #endif
   }
+
 #ifdef RLB_SO
   for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
     struct filter *fl = &cfg->filters[cfg->cf];
