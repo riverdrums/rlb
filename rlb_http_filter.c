@@ -5,9 +5,13 @@
 #include <rlb.h>
 #include <ctype.h>
 
+
 /**
- * This shared object filter is intended to be used with rlb as a 
- * front-end to a cluster of web servers.
+ *   HTTP CONTENT FILTER
+ *   ===================
+ *
+ *  This shared object filter is intended to be used with 
+ *  rlb as a front-end to a cluster of web servers.
  */
 
 
@@ -120,17 +124,17 @@ struct rlbfilter {
 
 
 /* API Function declarations */
-int   rlb_init(struct cfg *cfg);
-void  rlb_cleanup(struct cfg *cfg);
-int   rlb_filter(struct connection *c, int r);
-int   rlb_close(struct connection *c);
-void  rlb_get_server(struct connection *c);
+int   rlb_init(struct cfg *cfg, void **data);
+void  rlb_cleanup(struct cfg *cfg, void **data);
+int   rlb_filter(struct connection *c, int r, void *data);
+int   rlb_close(struct connection *c, void *data);
+void  rlb_get_server(struct connection *c, void *data);
 
 
 /* Internal function declarations */
 struct request *  _rlbf_request(char *buf, int len);
 struct addrinfo * _rlbf_get_addrinfo(char *h, char *p);
-void  _rlbf_log(struct cfg *cfg, struct connection *c);
+void  _rlbf_log(struct connection *c, void *data);
 void  _rlbf_add_server(struct rlbfilter *rlbf, char *host, char *port);
 char *_rlbf_strnstr(char *str, char *find, int hl);
 int   _rlbf_move(struct connection *c, char *start, char *end, char *insert, int len);
@@ -146,12 +150,12 @@ int   _rlbf_move(struct connection *c, char *start, char *end, char *insert, int
  * Initialise our own set of servers.
  */
 
-int rlb_init(struct cfg *cfg) 
+int rlb_init(struct cfg *cfg, void **data)
 {
   struct rlbfilter *rlbf = calloc(1, sizeof(struct rlbfilter));
 
   if (rlbf) {
-    cfg->userdata = (void *) rlbf;
+    *data = (void *) rlbf;
 
     if ( (rlbf->f = fopen(RLB_LOGFILE, "a+")) == NULL) {
       char pwd[256];
@@ -172,9 +176,9 @@ int rlb_init(struct cfg *cfg)
  * Close the logfile if needed. Free server and data structures.
  */
 
-void rlb_cleanup(struct cfg *cfg) 
+void rlb_cleanup(struct cfg *cfg, void **data)
 {
-  struct rlbfilter *rlbf = (struct rlbfilter *) cfg->userdata;
+  struct rlbfilter *rlbf = (struct rlbfilter *) *data;
 
   if (rlbf) {
     if (rlbf->f) {
@@ -200,12 +204,13 @@ void rlb_cleanup(struct cfg *cfg)
  *                Note that we only support GET POST and HEAD requests
  *                to our servers, you might want to add further methods
  *                such as PROPFIND, CONNECT &c
+ *
  *  - RLB_SERVER: Rewrite the 'Location' header returned from the
  *                server. Extract the server return code, and keep
  *                a running track of the data size being returned.
  */
 
-int rlb_filter(struct connection *c, int r) 
+int rlb_filter(struct connection *c, int r, void *data)
 {
   struct cfg *cfg = c->cfg;
 
@@ -219,11 +224,11 @@ int rlb_filter(struct connection *c, int r)
           strncmp(c->b + c->pos, "HEAD ", 5) == 0) ) {
       
       /* Log any previous requests on this connection that haven't been closed */
-      _rlbf_log(cfg, c);
+      _rlbf_log(c, data);
 
       /* This is guaranteed to work, provided that when we realloc() that we also
        * add one (as in rlb.c) */
-      *(c->b + c->pos + c->len) = 0;
+      *(c->b + c->pos + c->len) = '\0';
 
 
 #ifdef RLB_HOST
@@ -272,21 +277,24 @@ int rlb_filter(struct connection *c, int r)
 
 #ifdef RLB_FILTER_DEBUG
       /* Print out any header data */
-      *(c->b + c->pos + c->len) = 0;
+      *(c->b + c->pos + c->len) = '\0';
       printf("\n------\n%s", c->b + c->pos);
       fflush(stdout);
 #endif
 
 #ifdef RLB_IMAGE_SERVER
       {
-        struct rlbfilter *rlbf = (struct rlbfilter *) cfg->userdata;
+        struct rlbfilter *rlbf = (struct rlbfilter *) data;
+
         if (_rlbf_strnstr(c->b + c->pos, RLB_IMAGE_STRING, 32)) {
           /* This tells rlb to reconnect to the image server */
           c->so_server = &rlbf->s[0];
+
         } else if (c->server && c->server == &rlbf->s[0]) {
           /* Tells rlb to reconnect to the original server (ie not the image server) */
           c->reconnect = 1;
         }
+
       }
 #endif
 
@@ -307,11 +315,11 @@ int rlb_filter(struct connection *c, int r)
         char *p = memchr(c->b + c->pos, ' ', c->len), *cp2;
         int l = 0;
 
-        *(c->b + c->pos + c->len) = 0;
+        *(c->b + c->pos + c->len) = '\0';
 
         /* Find the result code */
         if (p && (cp2 = memchr(++p, ' ', (c->b + c->pos + c->len) - p)) ) {
-          *cp2 = 0;
+          *cp2 = '\0';
           rq->code = atoi(p);
           *cp2 = ' ';
         }
@@ -378,14 +386,14 @@ int rlb_filter(struct connection *c, int r)
  * the CLIENT connection sets the 'userdata' variable.
  */
 
-int rlb_close(struct connection *c) 
+int rlb_close(struct connection *c, void *data)
 {
   struct cfg *cfg = NULL;
 
   if (c && (cfg = c->cfg) ) {
     struct request *r = NULL;
 
-    _rlbf_log(cfg, c);
+    _rlbf_log(c, data);
 
     /* Only assign this here, as the call to log itself could free the
      * userdata data */
@@ -405,11 +413,11 @@ int rlb_close(struct connection *c)
  *  - If there is no 'delay': after the client connects, before connecting to the server
  *  - With 'delay': After the first read from the client, after any filter, before connecting to the server
 
-void rlb_get_server(struct connection *c)
+void rlb_get_server(struct connection *c, void *data)
 {
   if (c->so_server == NULL) {
     struct cfg *cfg = c->cfg;
-    struct rlbfilter *rlbf = (struct rlbfilter *) cfg->userdata;
+    struct rlbfilter *rlbf = (struct rlbfilter *) data;
     if (rlbf && rlbf->s) {
       c->so_server = &rlbf->s[0];
     }
@@ -518,7 +526,7 @@ int _rlbf_move(struct connection *c, char *start, char *end, char *insert, int l
  */
 
 void
-_rlbf_log(struct cfg *cfg, struct connection *c)
+_rlbf_log(struct connection *c, void *data)
 {
   struct request *r = NULL;
   struct rlbfilter *rlbf = NULL;
@@ -527,13 +535,13 @@ _rlbf_log(struct cfg *cfg, struct connection *c)
     return;
   }
 
-  if ( (r = (struct request *) c->userdata) && (rlbf = (struct rlbfilter *) cfg->userdata) && rlbf->f) {
+  if ( (r = (struct request *) c->userdata) && (rlbf = (struct rlbfilter *) data) && rlbf->f) {
     char h[64], buf[32], *tf = "%d/%b/%Y:%T %z";
     struct sockaddr *sa = &c->sa;
     time_t t;
 
     if (getnameinfo(sa, sizeof(*sa), h, sizeof(h), NULL, 0, NI_NUMERICHOST) != 0) {
-      *h = 0;
+      *h = '\0';
     }
 
     t = time(NULL); 
