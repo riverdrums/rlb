@@ -43,36 +43,39 @@ COMPILING
   Solaris:
   $ cc -Wall -O2 -o rlb rlb.c -lnsl -lsocket -levent
 
-  If you want to use the content filtering API:
+  If you want to use the content filtering (shared object) API:
   $ gcc -DRLB_SO -Wall -O2 -o rlb rlb.c -levent (-ldl)
 
 3. Optionally, compile a shared object filter:
 
-  -- To compile your own filter from a filter.c source file:
+  To compile your own filter from a filter.c source file:
   $ gcc -DRLB_SO -Wall -O2 -I. -fPIC -shared -o filter.so filter.c
 
   To use your own filter:
-  $ rlb -p 80 -h host1:80 -h host2:80 [other options] -o ./filter.so
+  $ rlb -p 80 -h host1 -h host2 [other options] -o ./filter.so
 
 Build options for other architectures: please send to the author.
 
 
 USAGE
 
-$ rlb -p port -h host:service[:max] [-h host:service[:max] ...] [-b addr] [-B addr] [-m max] [-t timeout] [-c check interval] [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients] [-r] [-S] [-d] [-f] [-o shared object]
+$ rlb -p port -h host[:service:max] [-h host[:service:max] ...] [-b addr] [-B addr] [-m max] [-t timeout] [-c check interval] [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients] [-r] [-S] [-d] [-f] [-o shared object] [-o shared object ...]
 
 
 OPTIONS
 
   -p  port  Listen on this port
-  -h  host:service[:max]
+  -h  host[:service:max]
             Specify a backend server and service. The 'max' parameter, if
             specified, is the maximum number of simultaneous connections
             allowed to that server.
-            Service can be a port number (80) or service name (www).
+            Service can be a port number (80) or service name (www). If
+            the service is not given, then it defaults to the -p
+            parameter (local port listened on). In this case, the port
+            parameter must precede the host parameter.
             This option can be specified multiple times.
-  -b  addr  Bind to this interface when listening
-  -B  addr  Bind to this interface when connecting to backend servers
+  -b  addr  Bind to this interface when listening.
+  -B  addr  Bind to this interface when connecting to backend servers.
   -m  max   Maximum number of accepted connections to the load balancer. The
             default is to use the system limit (RLIMIT_NOFILE). The minimum
             value for this field is enforced to 8. This is a file
@@ -102,7 +105,9 @@ OPTIONS
             use with content filters, which may want to select a server
             to connect to based on the very first data that is read.
   -f        Run in the foreground (cancels the -n option)
-  -o  so    Load the specified shared object content filter.
+  -o  so    Load the specified shared object content filter. This option
+            can be specified multiple times. Filters are called in the
+            order in which they are given on the command line.
 
 
 CLIENT TRACKING
@@ -131,6 +136,9 @@ RLB provides an API via a shared object to user-defined content filters.
 For this to work, rlb must be compiled with RLB_SO defined (add -DRLB_SO
 to the make options).
 
+Filters can be chained together and will be called in the order in which
+they are given on the command line.
+
 Five API functions are defined. None are required, and they are only
 called if they are found in the shared object.
 
@@ -143,31 +151,33 @@ client IP address (to backend servers, all requests come from the load
 balancer's IP address). You will need to modify a few variables at the
 top of the file to get it to work for your setup.
 
-1. int rlb_init(struct cfg *);
+1. int rlb_init(struct cfg *, void **);
 
   This function is called on startup. It takes the configuration
-  structure as a parameter. It is called after everything has been
-  configured and setup, just before the call to listen(). If you return
-  less than 0 from this function, the program will exit.
+  structure and a pointer reference as parameters. It is called after
+  everything has been configured and setup, just before the call to
+  listen(). If you return less than 0 from this function, the program
+  will exit.
 
-  If you want to set your own 'global' parameters, a variable
-  cfg->userdata is provided. You can store anything in it, it is defined
-  as 'void *'. For example, you could malloc() your own data structure
-  and point cfg->userdata to it. You should then provide rlb_cleanup()
-  with a method of freeing any resources you allocate. You can access
-  this data structure for the duration of the process in any of the
-  other API calls.
+  If you want to set your own 'global' parameters, a variable pointer
+  'data' is provided. You can store anything in it, it is defined as
+  'void *'. For example, you could malloc() your own data structure and
+  point '*data' to it. You should then provide rlb_cleanup() with a
+  method of freeing any resources you allocate. You can access this data
+  structure for the duration of the process in any of the other API
+  calls. It is persistent whilst rlb is running. Each filter can set
+  their own data container separately.
 
   Example:
 
-int rlb_init(struct cfg *cfg) {
+int rlb_init(struct cfg *cfg, void **data) {
   FILE *f = fopen("rlb_filter.log", "a+");
-  if (f) cfg->userdata = (FILE *) f;
+  if (f) *data = (void *) f;
   return 0;
 }
 
 
-2. void rlb_cleanup(struct cfg *);
+2. void rlb_cleanup(struct cfg *, void **);
 
   This function is called just before the process exits, before the
   handle to the shared object is closed. You should generally use it to
@@ -176,19 +186,20 @@ int rlb_init(struct cfg *cfg) {
 
   Example:
 
-void rlb_cleanup(struct cfg *cfg) {
-  FILE *f = (FILE *) cfg->userdata;
+void rlb_cleanup(struct cfg *cfg, void **) {
+  FILE *f = (FILE *) *data;
   if (f) fclose(f);
 }
 
 
-3. int rlb_filter(struct connection *, int);
+3. int rlb_filter(struct connection *, int, void *);
 
   This is the most useful function. It is called after every data read,
   in both directions. It is passed the connection data structure, where
   the data buffer, positions and length can be accessed, as well as an
   integer which represents the amount of data read in the last call to
-  read().
+  read(). The third parameter is a per-filter data container that must
+  have been previously assigned in rlb_init().
 
   You can pretty much do what you like with the data, including
   reallocating memory if you want to rewrite data in the data buffer.
@@ -229,6 +240,9 @@ int rlb_filter(struct connection *c, int r) {
        struct cfg *cfg = c->cfg;
        struct connection *other = &cfg->conn[c->od];
      }
+     It may not always be defined (eg if -d is specified, the first call
+     to the filter will not have have a corresponding server
+     connection).
   g) The buffer size is stored in the variable c->bs. If you reallocate
      the data buffer (c->b), you need to reassign this variable too.
   h) Total statistics for a connection are in the variables c->nr
@@ -240,15 +254,21 @@ int rlb_filter(struct connection *c, int r) {
   j) There is also a 'void *' userdata parameter in the connection
      structure, that is persistent across a connection. It can be used
      as a data container, and should be freed in the corresponding call
-     to rlb_close().
+     to rlb_close(). This is different than the variable passed to the
+     rlb_filter() function, 'data', which is the 'global' data pointer
+     (ie the one assigned by rlb_init()). If you assigned c->userdata,
+     you should free the applicable resources in rlb_close().
 
-4. void rlb_close(struct connection *);
+4. void rlb_close(struct connection *, void *);
 
   Called for each connection when it is closed. It is called before any
   of the other closing operations, such as shutting down the socket,
   happen, so you still have access to all the variables, such as total
   bytes read, written, information regarding the server that was
-  connected to, client connection data etc.
+  connected to, client connection data etc. The second parameter, a void
+  pointer, is the pointer to the 'global' data that gets assigned in
+  rlb_init(). Access to connection specific data is in the userdata
+  variable in the connection structure.
 
 5. void rlb_get_server(struct cfg *, struct connection *);
 
@@ -260,10 +280,14 @@ int rlb_filter(struct connection *c, int r) {
   connection data structure. The rlb engine then notices this, and
   connects to your specified server. You need to assign the variables in
   the server structure, such as the addrinfo pointer, as well as the
-  'status' variable to indicate that the server is alive.
+  'status' variable to indicate that the server is alive. See the
+  example rlb_http_filter.c file.
+
+  You can also set the c->reconnect variable to 1. This will tell rlb to
+  renogotiate a server.
 
 
-NOTE ON MEMORY USAGE
+MEMORY USAGE
 
 The default behaviour is to take the maximum number of file descriptors
 that can be opened by the process, and for each of these 'connection'
@@ -274,14 +298,48 @@ the -m max flag) or the size of the allocated buffers (via the -s size
 flag), or both.
 
 
-NOTE ON CODING STYLE
+SERVER WEIGHTING
+
+Currently, all servers in the cluster have equal weighting and will be
+selected in turn.
+
+To give a server extra weight, it can be specified more than once on the
+command line. For example, using: '-h s1 -h s1 -h s2' will
+cause server s1 to receive two thirds of requests and server s2 will
+receive one third.
+
+Another way to control throughput to servers is to limit the maximum
+number of simultaneous connections that they can accept via the third
+parameter to the -h argument.
+
+A third way is via the rlb_get_server() API, where you can write your
+own server weighting algorithm.
+
+
+SIGNALS
+
+Sending a SIGUSR1 signal to rlb will cause it to write out a status file
+with the following information:
+
+  - Sockets in use
+  - Server status (number connected, last failed operation)
+  - Client tracking status
+
+The file will be called 'rlb.status.PID' in the rlb running directory.
+
+Sending a SIGUSR2 signal will tell rlb to examine each server again. By
+default it will only do this every 30 seconds (or after the parameter
+set by -c).
+
+
+CODING STYLE
 
 This project has also been an exercise in style. The rlb.c file has the
 intention of being as compressed, concise and explosive as possible. It
 is not commented, and is dense and spiky.
 
-The example filter file (rlb_http_filter.c) is the opposite, expansive
-and well-commented.
+The example filter file (rlb_http_filter.c) is the opposite, expansive,
+well-commented and relaxed. It invites you to enjoy it at your leisure.
 
 
 TODO
@@ -290,7 +348,7 @@ TODO
 2. Reload on the fly without losing any current connections
 3. Re-select server after first read error (non-blocking connect error)
 4. Finalise the rlb_get_server() API interface
-5. Filter chains
+5. Server weighting
 
 
 CREDITS

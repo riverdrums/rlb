@@ -55,6 +55,7 @@
 /**
  * Where to log to. Make sure that there are sufficient permissions on this
  * file if you set either of the 'user' (-u) or 'jail' (-j) options to rlb.
+ * Comment this line out if you don't want to log anything
  */
 #define RLB_LOGFILE       "access_log"
 
@@ -62,8 +63,9 @@
 /**
  * If you want to replace the 'Server: ' line with a customised value, then
  * edit the following line. Used when filtering data from the server back to
- * the client. Comment this line out if you just want to send back the
- * Server signature of your backend webservers.
+ * the client. 
+ * Comment this line out if you just want to send back the Server signature of
+ * your backend webservers.
  */
 #define RLB_SERVER_HDR    "Riverdrums Load Balancer"
 
@@ -157,10 +159,12 @@ int rlb_init(struct cfg *cfg, void **data)
   if (rlbf) {
     *data = (void *) rlbf;
 
+#ifdef RLB_LOGFILE
     if ( (rlbf->f = fopen(RLB_LOGFILE, "a+")) == NULL) {
       char pwd[256];
       fprintf(stderr, "(%s)|%s: %s\n", getcwd(pwd, sizeof(pwd)), RLB_LOGFILE, strerror(errno));
     }
+#endif
 
 #ifdef RLB_IMAGE_SERVER
     _rlbf_add_server(rlbf, RLB_IMAGE_SERVER, RLB_IMAGE_PORT);

@@ -133,7 +133,7 @@ static void _read(const int fd, struct connection *c)
     }
   }
 #endif
-  if (c->nr - r == 0 && c->scope == RLB_CLIENT && cfg->delay) {
+  if (cfg->delay && c->nr - r == 0 && c->scope == RLB_CLIENT) {
 #ifdef RLB_SO
     if (cfg->gsi) {
       for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
@@ -197,7 +197,7 @@ static void _event_set(struct connection *c, short event)
 static void _close(struct cfg *cfg, struct connection *c)
 {
   _reset(cfg, c);
-  if (c->od >= 0 && !c->closed) { _reset(cfg, &cfg->conn[c->od]); cfg->conn[c->od].od = -1; c->od = -1; }
+  if (c->od >= 0 && !c->closed) { _reset(cfg, &cfg->conn[c->od]); cfg->conn[c->od].od = c->od = -1; }
 }
 
 static void _reset(struct cfg *cfg, struct connection *c)
