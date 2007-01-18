@@ -222,17 +222,17 @@ int rlb_filter(struct connection *c, int r, void *data)
     struct request *r = NULL;
 
     /* Rewrite header information */
-    if (c->len > 4 &&
-         (strncmp(c->b + c->pos, "GET ",  4) == 0 ||
-          strncmp(c->b + c->pos, "POST ", 5) == 0 || 
-          strncmp(c->b + c->pos, "HEAD ", 5) == 0) ) {
+    if (c->rb->len > 4 &&
+         (strncmp(c->rb->b + c->rb->pos, "GET ",  4) == 0 ||
+          strncmp(c->rb->b + c->rb->pos, "POST ", 5) == 0 || 
+          strncmp(c->rb->b + c->rb->pos, "HEAD ", 5) == 0) ) {
       
       /* Log any previous requests on this connection that haven't been closed */
       _rlbf_log(c, data);
 
       /* This is guaranteed to work, provided that when we realloc() that we also
        * add one (as in rlb.c) */
-      *(c->b + c->pos + c->len) = '\0';
+      *(c->rb->b + c->rb->pos + c->rb->len) = '\0';
 
 
 #ifdef RLB_HOST
@@ -241,8 +241,8 @@ int rlb_filter(struct connection *c, int r, void *data)
         int hl = strlen(RLB_HOST);
 
         /* Rewrite the 'Host: ' header for HTTP/1.1 requests */
-        if ( (p = _rlbf_strnstr(c->b + c->pos, "Host: ", c->len)) && (p += 6) ) {
-          if ( (cp = memchr(p, '\n', (c->b + c->pos + c->len) - p)) ) {
+        if ( (p = _rlbf_strnstr(c->rb->b + c->rb->pos, "Host: ", c->rb->len)) && (p += 6) ) {
+          if ( (cp = memchr(p, '\n', (c->rb->b + c->rb->pos + c->rb->len) - p)) ) {
             while (isspace(*cp)) {
               cp--;
             }
@@ -256,12 +256,12 @@ int rlb_filter(struct connection *c, int r, void *data)
         }
 
         /* Rewrite the 'Referer: http://' header */
-        if ( (p = _rlbf_strnstr(c->b + c->pos, "Referer:", c->len)) && (p += 8) ) {
-          if (p + 8 < c->b + c->pos + c->len && strncasecmp(p, " http://", 8) == 0) {
+        if ( (p = _rlbf_strnstr(c->rb->b + c->rb->pos, "Referer:", c->rb->len)) && (p += 8) ) {
+          if (p + 8 < c->rb->b + c->rb->pos + c->rb->len && strncasecmp(p, " http://", 8) == 0) {
             p += 8;
           }
 
-          if ( (cp = memchr(p, '/', (c->b + c->pos + c->len) - p)) ) {
+          if ( (cp = memchr(p, '/', (c->rb->b + c->rb->pos + c->rb->len) - p)) ) {
             if (_rlbf_move(c, p, cp, RLB_HOST, hl) < 0) {
               return -1;
             }
@@ -275,14 +275,14 @@ int rlb_filter(struct connection *c, int r, void *data)
        * We do this after the above two have been rewritten so that
        * our logfiles look correct.
        */
-      if ( (r = _rlbf_request(c->b + c->pos, c->len)) ) {
+      if ( (r = _rlbf_request(c->rb->b + c->rb->pos, c->rb->len)) ) {
         c->userdata = (void *) r;
       }
 
 #ifdef RLB_FILTER_DEBUG
       /* Print out any header data */
-      *(c->b + c->pos + c->len) = '\0';
-      printf("\n------\n%s", c->b + c->pos);
+      *(c->rb->b + c->rb->pos + c->rb->len) = '\0';
+      printf("\n------\n%s", c->rb->b + c->rb->pos);
       fflush(stdout);
 #endif
 
@@ -290,7 +290,7 @@ int rlb_filter(struct connection *c, int r, void *data)
       {
         struct rlbfilter *rlbf = (struct rlbfilter *) data;
 
-        if (_rlbf_strnstr(c->b + c->pos, RLB_IMAGE_STRING, 32)) {
+        if (_rlbf_strnstr(c->rb->b + c->rb->pos, RLB_IMAGE_STRING, 32)) {
           /* This tells rlb to reconnect to the image server */
           c->so_server = &rlbf->s[0];
 
@@ -314,15 +314,15 @@ int rlb_filter(struct connection *c, int r, void *data)
     struct request *rq    = co ? (struct request *) co->userdata : NULL;
 
     if (rq) {
-      if (c->len > 7 && 
-          strncmp(c->b + c->pos, "HTTP/1.", 7) == 0) {
-        char *p = memchr(c->b + c->pos, ' ', c->len), *cp2;
+      if (c->rb->len > 7 && 
+          strncmp(c->rb->b + c->rb->pos, "HTTP/1.", 7) == 0) {
+        char *p = memchr(c->rb->b + c->rb->pos, ' ', c->rb->len), *cp2;
         int l = 0;
 
-        *(c->b + c->pos + c->len) = '\0';
+        *(c->rb->b + c->rb->pos + c->rb->len) = '\0';
 
         /* Find the result code */
-        if (p && (cp2 = memchr(++p, ' ', (c->b + c->pos + c->len) - p)) ) {
+        if (p && (cp2 = memchr(++p, ' ', (c->rb->b + c->rb->pos + c->rb->len) - p)) ) {
           *cp2 = '\0';
           rq->code = atoi(p);
           *cp2 = ' ';
@@ -330,8 +330,8 @@ int rlb_filter(struct connection *c, int r, void *data)
 
 #ifdef RLB_HERE
         /* Modify 'Location' header */
-        if ( (p = _rlbf_strnstr(c->b + c->pos, LOCATION, c->len)) && (p += strlen(LOCATION)) ) {
-          char *cp = memchr(p, '/', (c->b + c->pos + c->len) - p);
+        if ( (p = _rlbf_strnstr(c->rb->b + c->rb->pos, LOCATION, c->rb->len)) && (p += strlen(LOCATION)) ) {
+          char *cp = memchr(p, '/', (c->rb->b + c->rb->pos + c->rb->len) - p);
           if (cp) {
             if (_rlbf_move(c, p, cp, RLB_HERE, strlen(RLB_HERE)) < 0) {
               return -1;
@@ -342,11 +342,11 @@ int rlb_filter(struct connection *c, int r, void *data)
 
 #ifdef RLB_SERVER_HDR
         /* Modify the 'Server' header */
-        if ( (p = _rlbf_strnstr(c->b + c->pos, "Server: ", c->len)) && (p += 8) ) {
-          char *cp = memchr(p, '\r', (c->b + c->pos + c->len) - p);
+        if ( (p = _rlbf_strnstr(c->rb->b + c->rb->pos, "Server: ", c->rb->len)) && (p += 8) ) {
+          char *cp = memchr(p, '\r', (c->rb->b + c->rb->pos + c->rb->len) - p);
 
           if (cp == NULL) {
-            cp = memchr(p, '\n', (c->b + c->pos + c->len) - p);
+            cp = memchr(p, '\n', (c->rb->b + c->rb->pos + c->rb->len) - p);
           }
 
           if (cp) {
@@ -358,19 +358,19 @@ int rlb_filter(struct connection *c, int r, void *data)
 #endif
 
         /* Look for the end of the header */
-        if ( ( (p = _rlbf_strnstr(c->b + c->pos, "\r\n\r\n", c->len)) && (l = 4) ) || 
-             ( (p = _rlbf_strnstr(c->b + c->pos, "\n\n",     c->len)) && (l = 2) ) ) {
+        if ( ( (p = _rlbf_strnstr(c->rb->b + c->rb->pos, "\r\n\r\n", c->rb->len)) && (l = 4) ) || 
+             ( (p = _rlbf_strnstr(c->rb->b + c->rb->pos, "\n\n",     c->rb->len)) && (l = 2) ) ) {
 #ifdef RLB_FILTER_DEBUG
           char sav = *p;
           *p = '\0';
-          printf("======\n%s\n", c->b + c->pos);
+          printf("======\n%s\n", c->rb->b + c->rb->pos);
           fflush(stdout);
           *p = sav;
 #endif
           p += l;
 
           /* The request size doesn't include the header */
-          rq->size = (c->b + c->pos + c->len) - p;
+          rq->size = (c->rb->b + c->rb->pos + c->rb->len) - p;
         }
 
       } else {
@@ -497,30 +497,30 @@ int _rlbf_move(struct connection *c, char *start, char *end, char *insert, int l
     return -1;
   }
 
-  rest = c->len - ((end - start) - len);
-  need = c->pos + rest;
+  rest = c->rb->len - ((end - start) - len);
+  need = c->rb->pos + rest;
 
   /* Do we need more memory */
-  if (need > c->bs) {
-    char *b = c->b;
-    int startpos = start - c->b, endpos = end - c->b;
+  if (need > c->rb->bs) {
+    char *b = c->rb->b;
+    int startpos = start - c->rb->b, endpos = end - c->rb->b;
 
-    if ( (b = (char *) realloc(c->b, need + 1)) ) {
-      c->bs = need;
-      c->b  = b;
-      start = c->b + startpos;
-      end   = c->b + endpos;
+    if ( (b = (char *) realloc(c->rb->b, need + 1)) ) {
+      c->rb->bs = need;
+      c->rb->b  = b;
+      start = c->rb->b + startpos;
+      end   = c->rb->b + endpos;
     } else {
       return -1;
     }
   }
 
   if (end - start != len) {
-    memmove(start + len, end, c->len - (end - (c->b + c->pos)));
+    memmove(start + len, end, c->rb->len - (end - (c->rb->b + c->rb->pos)));
   }
 
   memcpy(start, insert, len);
-  c->len -= (end - start) - len;
+  c->rb->len -= (end - start) - len;
 
   return 0;
 }
