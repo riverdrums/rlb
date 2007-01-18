@@ -21,6 +21,7 @@
 #include <netinet/in.h>
 #include <sys/resource.h>
 #include <event.h>
+#include <assert.h>
 
 struct client {
   unsigned int id;          /**< Client IP address */
@@ -36,18 +37,22 @@ struct server {
 
 typedef enum { RLB_NONE, RLB_CLIENT, RLB_SERVER } rlb_scope;
 
-struct connection {
-  int fd, od, bs;           /**< Socket, other socket, buffer size */
+struct buffer {
   char *b;                  /**< Data buffer */
+  int bs, taken;            /**< Buffer size / whether it is attached */
+  size_t len, pos;          /**< Length and position of data in the buffer */
+};
+
+struct connection {
+  int fd, od;               /**< Socket, other socket */
+  struct buffer *rb, *wb;   /**< Data buffers for read and write */
   unsigned int nr, nw;      /**< Read and write totals for connection */
-  size_t len, pos;          /**< Length and position in buffer of data */
   struct event ev;          /**< Event structure for libevent */
   struct server *server;    /**< RLB_CLIENT only: which server is backend */
   struct client *client;    /**< Pointer to previous connection information */
   struct cfg *cfg;          /**< Pointer to global configuration structure */
   rlb_scope scope;          /**< CLIENT=outside connection SERVER=backend server */
   struct sockaddr sa;       /**< Accepted client address */
-  int closed;               /**< Socket is closed, but there is still data to write */
   int connected;            /**< RLB_CLIENT only: whether we are connected to the server */
 #ifdef RLB_SO
   struct server *so_server; /**< Pointer to our own defined server to connect to */
@@ -70,9 +75,10 @@ struct filter {
 #endif
 
 struct cfg {
-  int bufsize, si, cs, num, daemon, fd, check, max; 
-  int ci, rr, stubborn, delay;
+  int bufsize, num, daemon, fd, check, max; 
+  int si, cs, ci, rr, stubborn, delay;
   struct connection *conn;  /**< Array of 'max' connections */
+  struct buffer *buffers;   /**< Array of 'max' buffers */
   struct server *servers;   /**< Array of 'si' servers */
   struct client *clients;   /**< Array of 'ci' clients */
   char *jail, *user;        /**< chroot() jail / Run as 'user' */
