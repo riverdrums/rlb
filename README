@@ -297,7 +297,7 @@ int rlb_filter(struct connection *c, int r, void *data) {
   example rlb_http_filter.c file.
 
   You can also set the c->reconnect variable to 1. This will tell rlb to
-  renogotiate a server.
+  renegotiate a server.
 
   There is also initial support for telling the rlb engine not to write
   the data at all. Set the c->nowrite variable to one. However, at some

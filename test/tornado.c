@@ -37,7 +37,7 @@ void _do_tornado(struct addrinfo *a, char *tornado, int timeout)
                setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &on, sizeof(on));
                setsockopt(fd, IPPROTO_TCP, TCP_MAXSEG, &on, sizeof(on));
     do { r = connect(fd, a->ai_addr, a->ai_addrlen); } while (r == -1 && errno == EINTR);
-    if (r == 0) writen(fd, tornado, len, timeout);
+    if (r == 0) do { r = writen(fd, tornado, len, timeout); } while (r > 0);
     on = 0; setsockopt(fd, IPPROTO_TCP, TCP_CORK, &on, sizeof(on));
     do { r = close(fd); } while (r == -1 && errno == EINTR);
   }
