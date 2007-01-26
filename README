@@ -1,6 +1,6 @@
 $Id$
 
-RLB v0.5  Jason Armstrong <ja@riverdrums.com>
+RLB v0.6  Jason Armstrong <ja@riverdrums.com>
 Copyright (c) 2006-2007 Riverdrums
 http://rlb.sourceforge.net
 
@@ -127,7 +127,7 @@ transact until it is expired from the client tracking array, or the
 server becomes available again).
 
 For more advanced session tracking, such as cookie tracking for HTTP
-requests, see the content filtering API.
+requests, see the CONTENT FILTER API.
 
 
 CONTENT FILTER API
@@ -182,7 +182,10 @@ int rlb_init(struct cfg *cfg, void **data) {
   This function is called just before the process exits, before the
   handle to the shared object is closed. You should generally use it to
   de-allocate resources, and perform any other closing down actions
-  necessary.
+  necessary. By the time that this function is called, rlb will already
+  have freed all of it's own internal resources, such as connections,
+  buffers, client IP lists and server structures, so they can't be
+  referenced here.
 
   Example:
 
@@ -196,10 +199,11 @@ void rlb_cleanup(struct cfg *cfg, void **) {
 
   This is the most useful function. It is called after every data read,
   in both directions. It is passed the connection data structure, where
-  the data buffer, positions and length can be accessed, as well as an
-  integer which represents the amount of data read in the last call to
-  read(). The third parameter is a per-filter data container that must
-  have been previously assigned in rlb_init().
+  the data buffer, positions and length can be accessed via the 'rb'
+  (read buffer) parameter, as well as an integer which represents the
+  amount of data read in the last call to read(). The third parameter is
+  a per-filter data container that must have been previously assigned in
+  rlb_init().
 
   You can pretty much do what you like with the data, including
   reallocating memory if you want to rewrite data in the data buffer.
@@ -211,8 +215,8 @@ void rlb_cleanup(struct cfg *cfg, void **) {
   allocates one more byte than the official length. You can therefore do
   something like this:
 
-int rlb_filter(struct connection *c, int r) {
-  *(c->b + c->pos + c->len) = 0;
+int rlb_filter(struct connection *c, int r, void *data) {
+  *(c->rb->b + c->rb->pos + c->rb->len) = 0;
 }
 
   And you are guaranteed that you won't be overrunning the end of the
@@ -224,7 +228,7 @@ int rlb_filter(struct connection *c, int r) {
   a) All variables are incremented before this function is called (ie
      totals, buffer lengths etc).
   b) The second parameter is only the number of bytes in the last call
-     to read(). 
+     to read().
   c) To see if this is the very first read on a connection:
      if (c->nr - r == 0) { /* First read */ }
   d) You can distinguish between client and server connections by
@@ -243,21 +247,26 @@ int rlb_filter(struct connection *c, int r) {
      It may not always be defined (eg if -d is specified, the first call
      to the filter will not have have a corresponding server
      connection).
-  g) The buffer size is stored in the variable c->bs. If you reallocate
-     the data buffer (c->b), you need to reassign this variable too.
+  g) The buffer size is stored in the variable c->rb->bs. If you
+     reallocate the data buffer (c->rb->b), you need to reassign this
+     variable too.
   h) Total statistics for a connection are in the variables c->nr
      (number of bytes read) and c->nw (bytes written).
   i) The data that has just been read might not start at the beginning
      of the data buffer. If you want to examine the latest read data,
-     you should always use c->b + c->pos. The data length will be c->len
-     bytes.
+     you should always use c->rb->b + c->rb->pos. The data length will
+     be c->rb->len bytes.
   j) There is also a 'void *' userdata parameter in the connection
      structure, that is persistent across a connection. It can be used
      as a data container, and should be freed in the corresponding call
-     to rlb_close(). This is different than the variable passed to the
+     to rlb_close(). This is different to the variable passed to the
      rlb_filter() function, 'data', which is the 'global' data pointer
      (ie the one assigned by rlb_init()). If you assigned c->userdata,
-     you should free the applicable resources in rlb_close().
+     you should free the applicable resources in rlb_close(). You can
+     use the connection userdata variable (c->userdata) to keep track of
+     information for the length of a connection. See the example
+     rlb_http_filter.c code, where it is used to store HTTP request
+     information.
 
 4. void rlb_close(struct connection *, void *);
 
@@ -268,7 +277,9 @@ int rlb_filter(struct connection *c, int r) {
   connected to, client connection data etc. The second parameter, a void
   pointer, is the pointer to the 'global' data that gets assigned in
   rlb_init(). Access to connection specific data is in the userdata
-  variable in the connection structure.
+  variable in the connection structure. If you previously allocated any
+  memory in rlb_filter() and assigned it to c->userdata, this is where
+  it should be released.
 
 5. void rlb_get_server(struct cfg *, struct connection *);
 
@@ -285,6 +296,13 @@ int rlb_filter(struct connection *c, int r) {
 
   You can also set the c->reconnect variable to 1. This will tell rlb to
   renogotiate a server.
+
+  There is also initial support for telling the rlb engine not to write
+  the data at all. Set the c->nowrite variable to one. However, at some
+  point you must reset it to 0 (and be very sure that if you set it to 1
+  that you know more data will arrive), otherwise no further events will
+  be triggered and a timeout will be reached. This option is
+  experimental at the moment and may change.
 
 
 MEMORY USAGE
