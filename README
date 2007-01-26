@@ -107,7 +107,9 @@ OPTIONS
   -f        Run in the foreground (cancels the -n option)
   -o  so    Load the specified shared object content filter. This option
             can be specified multiple times. Filters are called in the
-            order in which they are given on the command line.
+            order in which they are given on the command line. This
+            option only has an effect if RLB is compiled with RLB_SO
+            defined.
 
 
 CLIENT TRACKING
@@ -350,6 +352,56 @@ default it will only do this every 30 seconds (or after the parameter
 set by -c).
 
 
+TESTING
+
+A number of test files are now included in the 'test' sub-directory.
+These files are designed to stress the load balancer in different ways.
+
+WARNING: These programs fork() and try to run as quickly as possible.
+Don't use them randomly, they consume resources.
+
+All the test programs take the same number of arguments: a number
+indicating how many children to fork, the name of the host on which the
+load balancer is running and the port on the host to connect to. An
+optional fourth argument is a timeout value, which defaults to 30 if not
+specified.
+
+  - flood
+    The flood program is designed to just open and close connections.
+    No data is sent.
+
+  - drought
+    This program opens connections and then sends data at a very slow
+    rate. It pauses for 25 seconds between each byte that gets sent. It
+    is meant to hold connections open for long period of time, and thus
+    you can specify a large 'fork' value.
+
+  - hail
+    Hail will try to write consecutive one byte packets to the server
+    until it is unable to anymore. The TCP_NODELAY socket option is set
+    to try to fragment the data as much as possible.
+
+  - bomb
+    This program tries to send large amounts of data (32K) to the
+    load balancer. It is used to test how RLB will react to it's
+    internal buffers being filled.
+
+  - tornado
+    Similar to bomb, but OOB data is also included in the data sent. It
+    will also try, as 'hail' does, to continue writing for as long as
+    the socket remains open.
+
+Something like this should be a pretty good test:
+
+$ for P in tornado flood drought hail bomb ; do $P 8 host port; done
+
+If you are feeling confident, then this should test the connection
+limits (assuming 1024 is the number of descriptors a process can have
+open at one time):
+
+$ tornado 300 host port; hail 300 host port;
+
+
 CODING STYLE
 
 This project has also been an exercise in style. The rlb.c file has the
@@ -367,6 +419,15 @@ TODO
 3. Re-select server after first read error (non-blocking connect error)
 4. Finalise the rlb_get_server() API interface
 5. Server weighting
+
+
+IDEAS
+
+Version 0.7 will include a 'control port' interface to the load
+balancer, which will be implemented along the lines of the current
+content filter plugins. The intention is to be able to connect to the
+running load balancer on a certain port, and to both query its status
+and reconfigure it on the fly.
 
 
 CREDITS
