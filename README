@@ -59,7 +59,11 @@ Build options for other architectures: please send to the author.
 
 USAGE
 
-$ rlb -p port -h host[:service:max] [-h host[:service:max] ...] [-b addr] [-B addr] [-m max] [-t timeout] [-c check interval] [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients] [-r] [-S] [-d] [-f] [-o shared object] [-o shared object ...]
+$ rlb -p port -h host[:service:max] [-h host[:service:max] ...] 
+     [-b addr] [-B addr] [-m max] [-t timeout] [-c check interval] 
+     [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients] 
+     [-r (round-robin)] [-S (stubborn)] [-d (delay)] [-f (foreground)]
+     [-o shared object [-o shared object] ...]
 
 
 OPTIONS
@@ -311,11 +315,11 @@ MEMORY USAGE
 
 The default behaviour is to take the maximum number of file descriptors
 that can be opened by the process, and for each of these 'connection'
-data structures, to allocate a SO_SNDBUF size char array.  This will
-result in the program allocating > 16 Mb of memory. If this is an issue,
-then you need to either reduce the maximum number of connections (via
-the -m max flag) or the size of the allocated buffers (via the -s size
-flag), or both.
+data structures, to allocate a buffer char array of SO_SNDBUF size.
+This will result in the program allocating > 16 Mb of memory. If this is
+an issue, then you need to either reduce the maximum number of
+connections (via the -m max flag) or the size of the allocated buffers
+(via the -s size flag), or both.
 
 
 SERVER WEIGHTING
@@ -342,6 +346,7 @@ Sending a SIGUSR1 signal to rlb will cause it to write out a status file
 with the following information:
 
   - Sockets in use
+  - Buffers in use
   - Server status (number connected, last failed operation)
   - Client tracking status
 
@@ -354,8 +359,8 @@ set by -c).
 
 TESTING
 
-A number of test files are now included in the 'test' sub-directory.
-These files are designed to stress the load balancer in different ways.
+A number of test files are included in the 'test' sub-directory.  These
+files are designed to stress the load balancer in different ways.
 
 WARNING: These programs fork() and try to run as quickly as possible.
 Don't use them randomly, they consume resources.
