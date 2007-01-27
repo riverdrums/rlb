@@ -3,6 +3,7 @@
  * $Id$ */
 
 #include "rlb.h"
+#include <assert.h>
 
 #ifdef RLB_SO
 #include <dlfcn.h>
@@ -104,7 +105,7 @@ static void _read(struct connection *c)
 
   if ( !b || (c->scope == RLB_SERVER && c->od < 0) ) return _close(cfg, c);
   if (b->pos + b->len == b->bs) { 
-    if (b->pos) { memmove(b, b + b->pos, b->len); b->pos = 0; }
+    if (b->pos) { memmove(b->b, b->b + b->pos, b->len); b->pos = 0; } 
     else { if (c->od < 0) _close(cfg, c); else event_del(&c->ev); return; }
   }
   if (c->od >= 0) co = &cfg->conn[c->od];
