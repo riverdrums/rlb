@@ -22,20 +22,34 @@
 #include <sys/resource.h>
 #include <event.h>
 
-#define RLB_VERSION    "0.6"
-#define RLB_TIMEOUT    30        /**< Socket timeout and dead server check interval */
-#define RLB_BUFSIZE    4096      /**< Default buffer size and number of clients to track */
+#ifdef RLB_SO
+#include <dlfcn.h>
+#endif
+
+#define RLB_VERSION   "0.7"
+#define RLB_TIMEOUT   30        /**< Socket timeout and dead server check interval */
+#define RLB_BUFSIZE   4096      /**< Default buffer size and number of clients to track */
 
 #ifdef RLB_DEBUG
-FILE *_rlb_fp = NULL;
+static FILE *_rlb_fp = NULL;
 # define RLOG(f,...) do { if (_rlb_fp) { struct timeval tv; gettimeofday(&tv, NULL); fprintf(_rlb_fp, "%lu.%06lu [%7s:%d] " f "\n", tv.tv_sec, tv.tv_usec, __FUNCTION__, __LINE__, ##__VA_ARGS__); fflush(_rlb_fp); } } while(0)
-# define SCOPE  (c->scope == RLB_CLIENT) ? "CLIENT" : (c->scope == RLB_SERVER) ? "SERVER" : " NONE "
+# if defined(RLB_SO) && defined(RLB_CONTROL)
+#   define SCOPE  (c->scope == RLB_CLIENT) ? "CLIENT" : (c->scope == RLB_SERVER) ? "SERVER" : (c->scope == RLB_CTRL) ? " CTRL " : " NONE "
+# else
+#   define SCOPE  (c->scope == RLB_CLIENT) ? "CLIENT" : (c->scope == RLB_SERVER) ? "SERVER" : " NONE "
+# endif
 #else
 # define RLOG(f,...)
 # define SCOPE ""
 #endif
 
-typedef enum { RLB_NONE, RLB_CLIENT, RLB_SERVER } rlb_scope;
+typedef enum { RLB_NONE, RLB_CLIENT, RLB_SERVER 
+#if defined(RLB_SO) && defined(RLB_CONTROL)
+  , RLB_CTRL
+#endif
+} rlb_scope;
+
+typedef enum { RLB_DEAD, RLB_ACTIVE, RLB_CLOSED } rlb_status;
 
 struct client {
   unsigned int id;          /**< Client IP address */
@@ -65,17 +79,20 @@ struct connection {
   struct cfg *cfg;          /**< Pointer to global configuration structure */
   rlb_scope scope;          /**< CLIENT=outside connection SERVER=backend server */
   struct sockaddr sa;       /**< Accepted client address */
-  int connected;            /**< RLB_CLIENT only: whether we are connected to the server */
 #ifdef RLB_SO
   struct server *so_server; /**< Pointer to our own defined server to connect to */
   int reconnect;            /**< Reconnect to another server during a connection */
   int nowrite;              /**< Don't write data when this is set */
-  void *userdata;           /**< Persistent across a connection */
+  void **userdata;          /**< Persistent across a connection (one for each filter) */
+# ifdef RLB_CONTROL
+  char fn[256];
+# endif
 #endif
 };
 
 #ifdef RLB_SO
 struct filter {
+  char name[64];                                /**< Reporting purposes only */
   void *h;                                      /**< Handle to shared object */
   void *userdata;                               /**< Persistent while rlb is running */
   int  (*fl)(struct connection *, int, void *); /**< Filter after read    rlb_filter() */
@@ -101,7 +118,22 @@ struct cfg {
 #ifdef RLB_SO
   struct filter *filters;                       /**< Array of 'fi' filters */
   int fi, ini, fri, gsi, fli, cli, cf;
+# ifdef RLB_CONTROL
+  char kh[64], kp[8];                           /**< Control host and port */
+  int kfd;                                      /**< Control socket */
+  struct timeval kto;                           /**< Control socket timeout */
+# endif
 #endif
 };
+
+
+struct addrinfo * rlb_get_addrinfo(char *h, char *p);
+int rlb_socket(struct cfg *cfg, struct addrinfo *a, int nb, int o);
+int rlb_closefd(int fd);
+int rlb_sockopt(const int fd, int nb);
+int rlb_check_server(struct cfg *cfg, struct server *s);
+char * rlb_strnstr(char *str, char *find, int n);
+int rlb_str_insert(struct connection *c, char *start, char *end, char *insert, int len);
+
 
 #endif
