@@ -60,8 +60,8 @@ int rlb_sockopt(const int fd, int nb)
 int rlb_check_server(struct cfg *cfg, struct server *s)
 {
   int fd, r;
-  if (s->status == RLB_CLOSED || !s->ai) return RLB_DEAD;
   if (s->status == RLB_ACTIVE) return RLB_ACTIVE;
+  if (s->status == RLB_CLOSED || !s->ai) return RLB_DEAD;
   if ( (fd = rlb_socket(cfg, s->ai, 0, 1)) < 0) return RLB_DEAD;
   do { r = connect(fd, s->ai->ai_addr, s->ai->ai_addrlen); } while (r == -1 && errno == EINTR);
   rlb_closefd(fd); s->status = !r; s->last = r ? time(NULL) : 0;
@@ -85,6 +85,7 @@ int rlb_str_insert(struct connection *c, char *start, char *end, char *insert, i
   /* If they're the same, don't do anything */
   if (strncmp(start, insert, len) == 0 && end - start == len) return 0;
   if ( !(bf = c->rb) || end < start) return -1;
+  if (end < bf->b || start < bf->b || end > bf->b + bf->bs || start > bf->b + bf->bs) return -1;
 
   rest = bf->len - ((end - start) - len);
   need = bf->pos + rest;
@@ -92,7 +93,7 @@ int rlb_str_insert(struct connection *c, char *start, char *end, char *insert, i
   /* Do we need more memory */
   if (need > bf->bs) {
     char *b = bf->b;
-    int startpos = start - bf->b, endpos = end - bf->b;
+    int startpos = start - b, endpos = end - b;
     if ( (b = realloc(bf->b, (need + 1) * sizeof(*b))) ) {
       bf->bs = need; bf->b = b;
       start = b + startpos;
@@ -100,7 +101,7 @@ int rlb_str_insert(struct connection *c, char *start, char *end, char *insert, i
     } else return -1;
   }
 
-  if ((end - start) != len) {
+  if ( (end - start) != len) {
     memmove(start + len, end, bf->len - (end - (bf->b + bf->pos)));
   }
   memcpy(start, insert, len);
