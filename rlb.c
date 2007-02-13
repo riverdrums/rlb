@@ -1,5 +1,4 @@
 /* rlb.c Jason Armstrong <ja@riverdrums.com> © 2006-2007 RIVERDRUMS
- * $ gcc [-DRLB_SO [-DRLB_CONTROL]] -Wall -O2 -o rlb rlb.c -levent [-ldl] (-lnsl -lsocket) 
  * $Id$ */
 
 #include "rlb.h"
@@ -25,7 +24,7 @@ static void _cleanup(struct cfg *cfg);
 static int  _bind(struct cfg *cfg);
 static void _sig(int signo);
 #ifdef RLB_SO
-static int _load_filter(struct cfg *cfg, const char *path, int init);
+static int _load_so(struct cfg *cfg, const char *path, int init);
 #endif
 
 int main(int argc, char *argv[]) {
@@ -111,11 +110,10 @@ static void _read(struct connection *c)
   }
   if (c->od >= 0) co = &cfg->conn[c->od];
   do { r = read(c->fd, b->b + b->pos + b->len, b->bs - b->len - b->pos); } while (r == -1 && errno == EINTR);
-  RLOG(" R fd=%-4d od=%-4d %s %4d (%d:%d:%d)", c->fd, c->od, SCOPE, r, b->pos, b->len, b->bs);
+  RLOG(" R fd=%-4d od=%-4d %s %4d (%d:%d %d)", c->fd, c->od, SCOPE, r, b->pos, b->len, b->bs);
   if (r <= 0) {
-    if (r < 0 && c->scope == RLB_SERVER) c->server->status = RLB_DEAD; 
-    if (co && b->len == 0) _close(cfg, co);
-    return _close(cfg, c);
+    if (r < 0 && c->scope == RLB_SERVER) c->server->status = RLB_DEAD;
+    if (co && b->len == 0) _close(cfg, co); return _close(cfg, c);
   }
   c->nr += r; b->len += r;
 #ifdef RLB_SO
@@ -130,15 +128,17 @@ static void _read(struct connection *c)
           fl = &cfg->filters[rc - 2];
           if (fl && fl->h) dlclose(fl->h);
           memset(fl, 0, sizeof(*fl));
-        } else if (rc == 0 && *c->fn) {
-          _load_filter(cfg, c->fn, 1);
-          *c->fn = '\0';
+        } else if (*c->fn) {
+          _load_so(cfg, c->fn, 1); *c->fn = '\0';
         }
-        return _event_set(c, EV_WRITE);
       }
 # endif
+      if (rc) return _event_set(c, EV_WRITE);
     }
   }
+#if defined(RLB_SO) && defined(RLB_CONTROL)
+  if (c->scope == RLB_CTRL) { event_add(&c->ev, &cfg->kto); return; }
+#endif
 #endif
   if (cfg->delay && c->nr - r == 0 && c->scope == RLB_CLIENT) {
 #ifdef RLB_SO
@@ -173,12 +173,11 @@ static void _write(struct connection *c)
 #endif
     if (b->len > 0) {
       do { r = write(c->fd, b->b + b->pos, b->len); } while (r == -1 && errno == EINTR);
-      RLOG(" W fd=%-4d od=%-4d %s %4d (%d:%d)", c->fd, c->od, SCOPE, r, b->pos, b->len);
+      RLOG(" W fd=%-4d od=%-4d %s %4d (%d:%d %d)", c->fd, c->od, SCOPE, r, b->pos, b->len, b->bs);
       if (r != b->len) {
         if (r <= 0) {
           if (c->scope == RLB_SERVER && c->nw == 0) { /* XXX Try next server */ }
-          if (co) _close(c->cfg, co);
-          return _close(c->cfg, c);
+          if (co) _close(c->cfg, co); return _close(c->cfg, c);
         }
         b->pos += r; c->nw += r; b->len -= r;
         event_add(&c->ev, &c->cfg->to);
@@ -206,8 +205,7 @@ static void _timeout(struct connection *c)
 static void _event_set(struct connection *c, short event)
 {
   if (!c || c->fd < 0) return;
-  event_del(&c->ev);
-  event_set(&c->ev, c->fd, event, _event, c);
+  event_del(&c->ev); event_set(&c->ev, c->fd, event, _event, c);
 #if defined(RLB_SO) && defined(RLB_CONTROL)
   if (c->scope == RLB_CTRL) { event_add(&c->ev, &c->cfg->kto); return; }
 #endif
@@ -287,7 +285,6 @@ static int _server(struct connection *c, short event)
   struct cfg *cfg = c->cfg;
   int fd = -1, r;
 
-  if (c->scope != RLB_CLIENT) return -1;
   while ( (c->server = _get_server(cfg, c)) ) {
     if ( (fd = rlb_socket(cfg, (a = c->server->ai), 1, 1)) < 0) return -1;
     if (fd >= cfg->max) return rlb_closefd(fd);
@@ -302,7 +299,7 @@ static int _server(struct connection *c, short event)
   {
     char h[64], p[64]; struct sockaddr *sa = c->server->ai->ai_addr;
     if (getnameinfo(sa, sizeof(*sa), h, 64, p, 64, NI_NUMERICHOST | NI_NUMERICSERV)) *h = *p = '\0';
-    RLOG("O: fd=%-4d od=%-4d         %s:%s %p n=%d", fd, c->fd, h, p, c->server, c->server->num);
+    RLOG("O: fd=%-4d od=%-4d             %s:%s %p n=%d", fd, c->fd, h, p, c->server, c->server->num);
   }
 #endif
   cn = &cfg->conn[fd]; cn->scope = RLB_SERVER;
@@ -497,7 +494,7 @@ static int _lookup_oaddr(struct cfg *cfg, char *outb)
 }
 
 #ifdef RLB_SO
-static int _load_filter(struct cfg *cfg, const char *path, int init)
+static int _load_so(struct cfg *cfg, const char *path, int init)
 {
   struct filter *fl = NULL, *f = NULL;
   char *p = strrchr(path, '/');
@@ -561,7 +558,7 @@ static int _cmdline(struct cfg *cfg, int ac, char *av[])
       case 'k': snprintf(cfg->kp, sizeof(cfg->kp), av[i]);      break;
       case 'K': snprintf(cfg->kh, sizeof(cfg->kh), av[i]);      break;
 # endif
-      case 'o': if (_load_filter(cfg, av[i], 0) < 0) return -1; break;
+      case 'o': if (_load_so(cfg, av[i], 0) < 0) return -1;     break;
 #endif
       case 'h': if (_parse_server(cfg, av[i]) < 0) return -1;   break;
       case 'B': if (_lookup_oaddr(cfg, av[i]) < 0) return -1;   break;
