@@ -30,19 +30,6 @@
 #define RLB_TIMEOUT   30        /**< Socket timeout and dead server check interval */
 #define RLB_BUFSIZE   4096      /**< Default buffer size and number of clients to track */
 
-#ifdef RLB_DEBUG
-static FILE *_rlb_fp = NULL;
-# define RLOG(f,...) do { if (_rlb_fp) { struct timeval tv; gettimeofday(&tv, NULL); fprintf(_rlb_fp, "%lu.%06lu [%7s:%d] " f "\n", tv.tv_sec, tv.tv_usec, __FUNCTION__, __LINE__, ##__VA_ARGS__); fflush(_rlb_fp); } } while(0)
-# if defined(RLB_SO) && defined(RLB_CONTROL)
-#   define SCOPE  (c->scope == RLB_CLIENT) ? "CLIENT" : (c->scope == RLB_SERVER) ? "SERVER" : (c->scope == RLB_CTRL) ? " CTRL " : " NONE "
-# else
-#   define SCOPE  (c->scope == RLB_CLIENT) ? "CLIENT" : (c->scope == RLB_SERVER) ? "SERVER" : " NONE "
-# endif
-#else
-# define RLOG(f,...)
-# define SCOPE ""
-#endif
-
 typedef enum { RLB_NONE, RLB_CLIENT, RLB_SERVER 
 #if defined(RLB_SO) && defined(RLB_CONTROL)
   , RLB_CTRL
