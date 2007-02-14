@@ -72,7 +72,7 @@ struct connection {
   int nowrite;              /**< Don't write data when this is set */
   void **userdata;          /**< Persistent across a connection (one for each filter) */
 # ifdef RLB_CONTROL
-  char fn[256];
+  char fn[256];             /**< Shared object name for rlb engine to load */
 # endif
 #endif
 };
@@ -101,10 +101,10 @@ struct cfg {
   struct timeval to;                            /**< Timeout value (seconds) */
   char host[64], port[8];                       /**< Listen host and port */
   struct sockaddr oaddr;                        /**< Bind to this address on 'connect()' */
-  size_t olen;
+  size_t olen;                                  /**< Outbound address size */
 #ifdef RLB_SO
   struct filter *filters;                       /**< Array of 'fi' filters */
-  int fi, ini, fri, gsi, fli, cli, cf;
+  int fi, ini, fri, gsi, fli, cli, cf;          /**< Filter counters */
 # ifdef RLB_CONTROL
   char kh[64], kp[8];                           /**< Control host and port */
   int kfd;                                      /**< Control socket */
