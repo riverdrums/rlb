@@ -1,6 +1,6 @@
 $Id$
 
-RLB v0.6  Jason Armstrong <ja@riverdrums.com>
+RLB v0.7  Jason Armstrong <ja@riverdrums.com>
 Copyright (c) 2006-2007 Riverdrums
 http://rlb.sourceforge.net
 
@@ -23,7 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 PREFACE
 
-RLB is a TCP load balancer aimed at clarity and efficiency.
+RLB is an event-driven TCP load balancer aimed at clarity and efficiency.
 
 
 REQUIREMENTS
@@ -38,18 +38,37 @@ COMPILING
 
 2. Compile RLB:
 
-  $ gcc -Wall -O2 -o rlb rlb.c -levent
+  a) Vanilla
+    $ gcc -Wall -O2 -c rlb.c
+    $ gcc -Wall -O2 -c common.c
+    $ gcc -Wall -O2 -o rlb rlb.o common.o -levent
 
-  Solaris:
-  $ cc -Wall -O2 -o rlb rlb.c -lnsl -lsocket -levent
+  b) Shared object support
+    If you want to use the content filtering (shared object) API you
+    need to add -DRLB_SO to the first line, and -ldl to the third:
 
-  If you want to use the content filtering (shared object) API:
-  $ gcc -DRLB_SO -Wall -O2 -o rlb rlb.c -levent (-ldl)
+    $ gcc -DRLB_SO -Wall -O2 -c rlb.c
+    $ gcc -Wall -O2 -c common.c
+    $ gcc -Wall -O2 -o rlb rlb.o common.o -levent -ldl
+
+  c) Control port interface support
+    To use the new control port interface, define both RLB_SO and
+    RLB_CONTROL:
+
+    $ gcc -DRLB_SO -DRLB_CONTROL -Wall -O2 -c rlb.c
+    $ gcc -Wall -O2 -c common.c
+    $ gcc -Wall -O2 -o rlb rlb.o common.o -levent -ldl
+
+  Solaris: add this to the last line: -lnsl -lsocket
+
 
 3. Optionally, compile a shared object filter:
 
   To compile your own filter from a filter.c source file:
   $ gcc -DRLB_SO -Wall -O2 -I. -fPIC -shared -o filter.so filter.c
+
+  To use the control port interface:
+  $ gcc -DRLB_SO -DRLB_CONTROL -Wall -O2 -I. -fPIC -shared -o f.so f.c
 
   To use your own filter:
   $ rlb -p 80 -h host1 -h host2 [other options] -o ./filter.so
@@ -59,10 +78,11 @@ Build options for other architectures: please send to the author.
 
 USAGE
 
-$ rlb -p port -h host[:service:max] [-h host[:service:max] ...] 
-     [-b addr] [-B addr] [-m max] [-t timeout] [-c check interval] 
-     [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients] 
+$ rlb -p port -h host[:service:max] [-h host[:service:max] ...]
+     [-b address] [-B address] [-m max] [-t timeout] [-c check interval]
+     [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients to track]
      [-r (round-robin)] [-S (stubborn)] [-d (delay)] [-f (foreground)]
+     [-k control port] [-K control address] [-T control timeout]
      [-o shared object [-o shared object] ...]
 
 
@@ -109,6 +129,9 @@ OPTIONS
             use with content filters, which may want to select a server
             to connect to based on the very first data that is read.
   -f        Run in the foreground (cancels the -n option)
+  -k  port  Listen on this port for control connections.
+  -K  addr  Bind to this interface for the control port.
+  -T  secs  Control port timeout. Default value is 30 seconds.
   -o  so    Load the specified shared object content filter. This option
             can be specified multiple times. Filters are called in the
             order in which they are given on the command line. This
@@ -237,18 +260,18 @@ int rlb_filter(struct connection *c, int r, void *data) {
      to read().
   c) To see if this is the very first read on a connection:
      if (c->nr - r == 0) { /* First read */ }
-  d) You can distinguish between client and server connections by
-     examining the c->scope parameter:
+  d) You can distinguish between client, server and control connections
+     by examining the c->scope parameter:
      if (c->scope == RLB_CLIENT) { /* Client specific */ }
      if (c->scope == RLB_SERVER) { /* Server specific */ }
+     if (c->scope == RLB_CTRL)   { /* Control specific */ }
   e) You have access to the global configuration structure via the
      c->cfg variable.
   f) The client and server are 'paired'. To get the other side of the
      pair, you need to check the c->od variable, and then find the
      corresponding connection structure:
      if (c->od >= 0) {
-       struct cfg *cfg = c->cfg;
-       struct connection *other = &cfg->conn[c->od];
+       struct connection *other = &c->cfg->conn[c->od];
      }
      It may not always be defined (eg if -d is specified, the first call
      to the filter will not have have a corresponding server
@@ -272,7 +295,9 @@ int rlb_filter(struct connection *c, int r, void *data) {
      use the connection userdata variable (c->userdata) to keep track of
      information for the length of a connection. See the example
      rlb_http_filter.c code, where it is used to store HTTP request
-     information.
+     information. Because there is a per-filter userdata variable for
+     each connection, you should use the following format to get the
+     specific variable for your filter: c->userdata[c->cfg->cf]
 
 4. void rlb_close(struct connection *, void *);
 
@@ -285,7 +310,8 @@ int rlb_filter(struct connection *c, int r, void *data) {
   rlb_init(). Access to connection specific data is in the userdata
   variable in the connection structure. If you previously allocated any
   memory in rlb_filter() and assigned it to c->userdata, this is where
-  it should be released.
+  it should be released. c->userdata[c->cfg->cf] is the variable you
+  should be looking at.
 
 5. void rlb_get_server(struct cfg *, struct connection *);
 
@@ -309,6 +335,49 @@ int rlb_filter(struct connection *c, int r, void *data) {
   that you know more data will arrive), otherwise no further events will
   be triggered and a timeout will be reached. This option is
   experimental at the moment and may change.
+
+
+CONTROL INTERFACE
+
+RLB has a separate control port interface that can be activated with the
+-k command line switch, specifying which port to use. Any connections
+received on this port are flagged as having the scope 'RLB_CTRL'.
+
+Exactly the same shared object options are available to connections
+received on the control port. The control port differs from normal
+connections in the following ways:
+
+  1. No connection to a backend server is attempted.
+  2. There is no default write buffer associated with the connection.
+     Filters can either allocate their own buffer structure and point
+     the write buffer to it (and take the responsibility of managing
+     it's resources), or use the read buffer as a write buffer itself
+     (ie c->wb = c->rb), and overwrite what was read from the client.
+  3. If a content filter 'rlb_filter()' returns > 0, then it is assumed
+     that there is data to be written back to the client, and a 'write'
+     event notification is set on the file descriptor.
+  4. If the content filter rlb_filter() returns > 1, then the rlb engine
+     takes this to mean that the shared object numbered by the return
+     value minus two should be unloaded.
+  5. If the content filter rlb_filter() sets the 'fn' variable to the
+     path of a shared object, then the rlb engine will attempt to load
+     that shared object and initialise it.
+  6. The scope of the connection is set to RLB_CTRL. Filters can then
+     check this and act appropriately.
+
+The design goal of the control port is to be able to interrogate the
+running load balancer regarding its internal state, as well as to
+interactively change various of the load balancer running options,
+including adding and deleting both servers and shared objects.
+
+
+RLB LIBRARY
+
+Some functionality that can be used in filters as well as in the rlb
+core engine has been moved into the file common.c. The functions are
+declared in rlb.h. To use these functions, either link your content
+filter with common.o, or create a library (ar rcs librlb.a common.o) and
+link against that (-lrlb).
 
 
 MEMORY USAGE
@@ -342,19 +411,8 @@ own server weighting algorithm.
 
 SIGNALS
 
-Sending a SIGUSR1 signal to rlb will cause it to write out a status file
-with the following information:
-
-  - Sockets in use
-  - Buffers in use
-  - Server status (number connected, last failed operation)
-  - Client tracking status
-
-The file will be called 'rlb.status.PID' in the rlb running directory.
-
-Sending a SIGUSR2 signal will tell rlb to examine each server again. By
-default it will only do this every 30 seconds (or after the parameter
-set by -c).
+User defined signal handlers have been removed due to the ability to
+query the running server via the control port.
 
 
 TESTING
@@ -419,20 +477,9 @@ well-commented and relaxed. It invites you to enjoy it at your leisure.
 
 TODO
 
-1. Server selection algorithms
-2. Reload on the fly without losing any current connections
-3. Re-select server after first read error (non-blocking connect error)
-4. Finalise the rlb_get_server() API interface
-5. Server weighting
-
-
-IDEAS
-
-Version 0.7 will include a 'control port' interface to the load
-balancer, which will be implemented along the lines of the current
-content filter plugins. The intention is to be able to connect to the
-running load balancer on a certain port, and to both query its status
-and reconfigure it on the fly.
+1. Server selection and weighting algorithms
+2. Re-select server after first read error (non-blocking connect error)
+3. Finalise the rlb_get_server() API interface
 
 
 CREDITS
@@ -448,7 +495,7 @@ programs, including:
  - Pound by Robert Segall     http://www.apsis.ch/pound
  - Netcat                     http://netcat.sourceforge.net
  - proxy_load_balancer        http://httpd.apache.org/docs/2.2/mod/mod_proxy_balancer.html
-
+   
 Thanks.
 
 
@@ -465,6 +512,7 @@ Jason Armstrong <ja@riverdrums.com>
 LINKS
 
 http://rlb.sourceforge.net
+http://jason.riverdrums.com
 
 
 # vim:tw=72:ts=2:si:ai:cin:fo=croqtln:is:ft=readme
