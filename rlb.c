@@ -438,7 +438,9 @@ static int _startup(struct cfg *cfg)
     cfg->buffers[i].bs = cfg->bufsize;
     cfg->conn[i].fd = cfg->conn[i].od = -1;
     if ( !(cfg->buffers[i].b = malloc(cfg->bufsize + 1)) ) return -1;
+#ifdef RLB_SO
     if ( !(cfg->conn[i].userdata = calloc(cfg->fi, sizeof(void *)))) return -1;
+#endif
   }
 
 #ifdef RLB_DEBUG
