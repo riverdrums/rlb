@@ -15,7 +15,7 @@ int main(int argc, char *argv[]) {
 int _tornado(int forks, char *host, char *port, int timeout)
 {
   struct addrinfo *ai = _get_addrinfo(host, port);
-  char *tornado = (char *) malloc(SIZE);
+  char *tornado = malloc(SIZE * sizeof *tornado);
   if (!ai || !tornado) return -1;
   while (forks--) {
     if (fork() == 0) {

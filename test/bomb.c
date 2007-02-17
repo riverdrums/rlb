@@ -15,7 +15,7 @@ int main(int argc, char *argv[]) {
 int _bomb(int forks, char *host, char *port, int timeout)
 {
   struct addrinfo *ai = _get_addrinfo(host, port);
-  char *bomb = (char *) malloc(SIZE);
+  char *bomb = malloc(SIZE * sizeof *bomb);
   if (!ai || !bomb) return -1;
   while (forks--) {
     if (fork() == 0) {
