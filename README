@@ -64,11 +64,18 @@ COMPILING
 
 3. Optionally, compile a shared object filter:
 
+  To compile the included rlb_http_filter shared object:
+
+  $ gcc -DRLB_SO -Wall -O2 -I. -fPIC -shared \
+      -o rlb_http_filter.so rlb_http_filter.c
+
   To compile your own filter from a filter.c source file:
-  $ gcc -DRLB_SO -Wall -O2 -I. -fPIC -shared -o filter.so filter.c
+  $ gcc -DRLB_SO -Wall -O2 -I. -fPIC -shared \
+      -o filter.so filter.c
 
   To use the control port interface:
-  $ gcc -DRLB_SO -DRLB_CONTROL -Wall -O2 -I. -fPIC -shared -o f.so f.c
+  $ gcc -DRLB_SO -DRLB_CONTROL -Wall -O2 -I. -fPIC -shared \
+      -o control.so control.c
 
   To use your own filter:
   $ rlb -p 80 -h host1 -h host2 [other options] -o ./filter.so
@@ -351,7 +358,7 @@ connections in the following ways:
   2. There is no default write buffer associated with the connection.
      Filters can either allocate their own buffer structure and point
      the write buffer to it (and take the responsibility of managing
-     it's resources), or use the read buffer as a write buffer itself
+     its resources), or use the read buffer as a write buffer itself
      (ie c->wb = c->rb), and overwrite what was read from the client.
   3. If a content filter 'rlb_filter()' returns > 0, then it is assumed
      that there is data to be written back to the client, and a 'write'
@@ -376,7 +383,7 @@ RLB LIBRARY
 Some functionality that can be used in filters as well as in the rlb
 core engine has been moved into the file common.c. The functions are
 declared in rlb.h. To use these functions, either link your content
-filter with common.o, or create a library (ar rcs librlb.a common.o) and
+filter with common.o, or create a library [ar rcs librlb.a common.o] and
 link against that (-lrlb).
 
 
@@ -512,7 +519,6 @@ Jason Armstrong <ja@riverdrums.com>
 LINKS
 
 http://rlb.sourceforge.net
-http://jason.riverdrums.com
 
 
 # vim:tw=72:ts=2:si:ai:cin:fo=croqtln:is:ft=readme
