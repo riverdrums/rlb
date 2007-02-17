@@ -82,7 +82,6 @@ int rlb_str_insert(struct connection *c, char *start, char *end, char *insert, i
   int rest, need;
   struct buffer *bf;
 
-  /* If they're the same, don't do anything */
   if (strncmp(start, insert, len) == 0 && end - start == len) return 0;
   if ( !(bf = c->rb) || end < start) return -1;
   if (end < bf->b || start < bf->b || end > bf->b + bf->bs || start > bf->b + bf->bs) return -1;
@@ -90,7 +89,6 @@ int rlb_str_insert(struct connection *c, char *start, char *end, char *insert, i
   rest = bf->len - ((end - start) - len);
   need = bf->pos + rest;
 
-  /* Do we need more memory */
   if (need > bf->bs) {
     char *b = bf->b;
     int startpos = start - b, endpos = end - b;
