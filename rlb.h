@@ -113,7 +113,6 @@ struct cfg {
 #endif
 };
 
-
 struct addrinfo * rlb_get_addrinfo(char *h, char *p);
 int rlb_socket(struct cfg *cfg, struct addrinfo *a, int nb, int o);
 int rlb_closefd(int fd);
@@ -121,6 +120,5 @@ int rlb_sockopt(const int fd, int nb);
 int rlb_check_server(struct cfg *cfg, struct server *s);
 char * rlb_strnstr(char *str, char *find, int n);
 int rlb_str_insert(struct connection *c, char *start, char *end, char *insert, int len);
-
 
 #endif

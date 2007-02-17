@@ -81,6 +81,9 @@ static void _cleanup(struct cfg *cfg)
   if (cfg->fd >= 0) cfg->fd = rlb_closefd(cfg->fd);
   for (i = 0; i < cfg->max; i++) {
     _close(cfg, &cfg->conn[i]); if (cfg->buffers[i].b) free(cfg->buffers[i].b);
+#ifdef RLB_SO
+    if (cfg->conn[i].userdata) free(cfg->conn[i].userdata);
+#endif
   }
   for (i = 0; i < cfg->si; i++) if (cfg->servers[i].ai) freeaddrinfo(cfg->servers[i].ai);
   if (cfg->servers) { free(cfg->servers); cfg->servers = NULL; } cfg->si  = 0;
