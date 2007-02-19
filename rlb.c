@@ -32,6 +32,7 @@ static struct client * _find_client(struct cfg *cfg, unsigned int addr);
 static int  _cmdline(struct cfg *cfg, int ac, char *av[]);
 static void _close(struct cfg *cfg, struct connection *c);
 static int  _server(struct connection *c, short event);
+static int  _bind_kp(struct cfg *cfg, int n);
 static void _read(struct connection *c);
 static void _cleanup(struct cfg *cfg);
 static int  _bind(struct cfg *cfg);
@@ -432,6 +433,7 @@ static int _startup(struct cfg *cfg)
       pid_t ppid = getpid();
       for (i = 0; i < cfg->num; i++) if (!fork()) break;
       if (getpid() == ppid) _exit(0);
+      if ( (rc = _bind_kp(cfg, i)) < 0) return rc;
     }
   } else if ( (rc = _bind(cfg)) < 0) return rc;
 
@@ -471,17 +473,26 @@ static int _bind(struct cfg *cfg)
   if (!ai) return -2; cfg->fd = rlb_socket(cfg, ai, 1, 0);
   if (cfg->fd >= 0) if (bind(cfg->fd, ai->ai_addr, ai->ai_addrlen) < 0) cfg->fd = rlb_closefd(cfg->fd);
   freeaddrinfo(ai); if (cfg->fd < 0) return -1;
+  if (!cfg->bufsize) getsockopt(cfg->fd, SOL_SOCKET, SO_SNDBUF, &cfg->bufsize, &l);
+  if (!cfg->bufsize) cfg->bufsize = RLB_BUFSIZE;
+  return 0;
+}
+
+static int _bind_kp(struct cfg *cfg, int n)
+{
 #if defined(RLB_SO) && defined(RLB_CONTROL)
   cfg->kfd = -1;
   if (*cfg->kp) {
+    struct addrinfo *ai = NULL;
+    int i = atoi(cfg->kp); 
+    if (i <= 0) return -1;
+    i += n; snprintf(cfg->kp, sizeof(cfg->kp), "%u", i);
     if ( !(ai = rlb_get_addrinfo(cfg->kh, cfg->kp)) ) { rlb_closefd(cfg->fd); return -2; }
     cfg->kfd = rlb_socket(cfg, ai, 1, 0);
     if (cfg->kfd >= 0) if (bind(cfg->kfd, ai->ai_addr, ai->ai_addrlen) < 0) cfg->kfd = rlb_closefd(cfg->kfd);
     freeaddrinfo(ai); if (cfg->kfd < 0) return (cfg->fd = rlb_closefd(cfg->fd));
   }
 #endif
-  if (!cfg->bufsize) getsockopt(cfg->fd, SOL_SOCKET, SO_SNDBUF, &cfg->bufsize, &l);
-  if (!cfg->bufsize) cfg->bufsize = RLB_BUFSIZE;
   return 0;
 }
 
@@ -550,9 +561,6 @@ static int _load_so(struct cfg *cfg, const char *path, int init)
 static int _cmdline(struct cfg *cfg, int ac, char *av[])
 {
   int i, j;
-#ifdef RLB_DEBUG
-  _rlb_fp = stdout;
-#endif
   memset(cfg, 0, sizeof(*cfg)); _gcfg = cfg; cfg->daemon = 1;
   for (i = j = 1; i < ac; j = ++i) {
     if (av[j][0] != '-' || (av[j][1] != 'f' && av[j][1] != 'r' && 

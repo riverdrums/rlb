@@ -26,7 +26,7 @@
 #include <dlfcn.h>
 #endif
 
-#define RLB_VERSION   "0.7"
+#define RLB_VERSION   "0.8"
 #define RLB_TIMEOUT   30        /**< Socket timeout and dead server check interval */
 #define RLB_BUFSIZE   4096      /**< Default buffer size and number of clients to track */
 

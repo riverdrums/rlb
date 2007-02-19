@@ -51,7 +51,7 @@
  * redirected to this server.
  * Comment the first line out if you don't want this
  */
-#define RLB_IMAGE_SERVER  "192.168.10.102"
+//#define RLB_IMAGE_SERVER  "192.168.10.102"
 #define RLB_IMAGE_PORT    "82"                  /**< Port on image server */
 #define RLB_IMAGE_STRING  "thumbs"              /**< What to look for in the URL */
 
@@ -61,7 +61,7 @@
  * file if you set either of the 'user' (-u) or 'jail' (-j) options to rlb.
  * Comment this line out if you don't want to log anything
  */
-#define RLB_LOGFILE       "access_log"
+//#define RLB_LOGFILE       "access_log"
 
 
 /**
