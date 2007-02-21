@@ -485,8 +485,7 @@ well-commented and relaxed. It invites you to enjoy it at your leisure.
 TODO
 
 1. Server selection and weighting algorithms
-2. Re-select server after first read error (non-blocking connect error)
-3. Finalise the rlb_get_server() API interface
+2. Finalise the rlb_get_server() API interface
 
 
 CREDITS
