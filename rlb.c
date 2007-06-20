@@ -342,6 +342,7 @@ static void _client(const int s, short event, void *config)
 
   cn = &cfg->conn[fd]; cn->fd = fd; cn->od = -1;
   cn->scope = RLB_CLIENT; cn->rb = _buffer(cn); cn->wb = NULL;
+  if (cn->rb == NULL) return _close(cfg, cn);
   memcpy(&cn->sa, &sa, l);
 #ifdef RLB_DEBUG
   { char h[64], p[8];
@@ -404,10 +405,6 @@ static int _startup(struct cfg *cfg)
   struct rlimit rl;
   int rc;
 
-  if (cfg->user)  if ( !(pw = getpwnam(cfg->user)) )                    return -1;
-  if (cfg->jail)  if (chdir(cfg->jail) < 0 || chroot(cfg->jail) < 0)    return -1;
-  if (pw)         if (setgid(pw->pw_gid < 0) || setuid(pw->pw_uid) < 0) return -1;
-
   getrlimit(RLIMIT_NOFILE, &rl);
   rl.rlim_cur = rl.rlim_max;
   setrlimit(RLIMIT_NOFILE, &rl);
@@ -435,6 +432,10 @@ static int _startup(struct cfg *cfg)
       if ( (rc = _bind_kp(cfg, i)) < 0) return rc;
     } else if ( (rc = _bind_kp(cfg, 0)) < 0) return rc;
   } else if ( (rc = _bind(cfg)) < 0 || (rc = _bind_kp(cfg, 0)) < 0) return rc;
+
+  if (cfg->user)  if ( !(pw = getpwnam(cfg->user)) )                    return -1;
+  if (cfg->jail)  if (chdir(cfg->jail) < 0 || chroot(cfg->jail) < 0)    return -1;
+  if (pw)         if (setgid(pw->pw_gid < 0) || setuid(pw->pw_uid) < 0) return -1;
 
   for (i = 0; i < cfg->max; i++) {
     cfg->conn[i].cfg   = cfg;
@@ -527,13 +528,10 @@ static int _load_so(struct cfg *cfg, const char *path, int init)
   struct filter *fl = NULL, *f = NULL;
   char *p = strrchr(path, '/');
   int i;
-  for (i = 0; i < cfg->fi; i++, f = NULL) {
-    if (!cfg->filters[i].h) { f = &cfg->filters[i]; break; }
-  }
+  for (i = 0; i < cfg->fi; i++, f = NULL) if (!cfg->filters[i].h) { f = &cfg->filters[i]; break; }
   if (!f) {
     if ( !(fl = realloc(cfg->filters, (cfg->fi + 1) * sizeof(*fl))) ) return -1;
     cfg->filters = fl; f = &fl[cfg->fi]; memset(f, 0, sizeof(*f));
-
     if (init) {
       for (i = 0; i < cfg->max; i++) {
         void **ud = cfg->conn[i].userdata;
@@ -563,7 +561,7 @@ static int _cmdline(struct cfg *cfg, int ac, char *av[])
   for (i = j = 1; i < ac; j = ++i) {
     if (av[j][0] != '-' || (av[j][1] != 'f' && av[j][1] != 'r' && 
                             av[j][1] != 'S' && av[j][1] != 'd' &&
-                            ++i >= ac) || strlen(av[j]) > 2) return -1;
+                           ++i >= ac) || strlen(av[j]) > 2) return -1;
     switch (av[j][1]) {
       case 'f': cfg->daemon     = 0;                            break;
       case 'S': cfg->stubborn   = 1;                            break;
