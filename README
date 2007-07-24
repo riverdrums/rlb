@@ -1,6 +1,6 @@
 $Id$
 
-RLB v0.7  Jason Armstrong <ja@riverdrums.com>
+RLB v0.8  Jason Armstrong <ja@riverdrums.com>
 Copyright (c) 2006-2007 Riverdrums
 http://rlb.sourceforge.net
 
@@ -40,7 +40,7 @@ COMPILING
 
   a) Vanilla
     $ gcc -Wall -O2 -c rlb.c
-    $ gcc -Wall -O2 -c common.c
+    $ gcc -Wall -O2 -I. -c common.c
     $ gcc -Wall -O2 -o rlb rlb.o common.o -levent
 
   b) Shared object support
@@ -48,7 +48,7 @@ COMPILING
     need to add -DRLB_SO to the first line, and -ldl to the third:
 
     $ gcc -DRLB_SO -Wall -O2 -c rlb.c
-    $ gcc -Wall -O2 -c common.c
+    $ gcc -Wall -O2 -I. -c common.c
     $ gcc -Wall -O2 -o rlb rlb.o common.o -levent -ldl
 
   c) Control port interface support
@@ -56,7 +56,7 @@ COMPILING
     RLB_CONTROL:
 
     $ gcc -DRLB_SO -DRLB_CONTROL -Wall -O2 -c rlb.c
-    $ gcc -Wall -O2 -c common.c
+    $ gcc -Wall -O2 -I. -c common.c
     $ gcc -Wall -O2 -o rlb rlb.o common.o -levent -ldl
 
   Solaris: add this to the last line: -lnsl -lsocket
@@ -202,13 +202,13 @@ top of the file to get it to work for your setup.
   method of freeing any resources you allocate. You can access this data
   structure for the duration of the process in any of the other API
   calls. It is persistent whilst rlb is running. Each filter can set
-  their own data container separately.
+  their own data container.
 
   Example:
 
 int rlb_init(struct cfg *cfg, void **data) {
   FILE *f = fopen("rlb_filter.log", "a+");
-  if (f) *data = (void *) f;
+  if (f) *data = f;
   return 0;
 }
 
@@ -225,8 +225,8 @@ int rlb_init(struct cfg *cfg, void **data) {
 
   Example:
 
-void rlb_cleanup(struct cfg *cfg, void **) {
-  FILE *f = (FILE *) *data;
+void rlb_cleanup(struct cfg *cfg, void **data) {
+  FILE *f = *data;
   if (f) fclose(f);
 }
 
@@ -371,6 +371,9 @@ connections in the following ways:
      that shared object and initialise it.
   6. The scope of the connection is set to RLB_CTRL. Filters can then
      check this and act appropriately.
+  7. When using more than one running RLB instance (with the -n option),
+     each child process gets a separate control port, sequentially,
+     starting with the port specified with -k.
 
 The design goal of the control port is to be able to interrogate the
 running load balancer regarding its internal state, as well as to
