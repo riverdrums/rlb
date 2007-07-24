@@ -1,7 +1,8 @@
 /* common.c Jason Armstrong <ja@riverdrums.com> © 2006-2007 RIVERDRUMS
+ * $ gcc -Wall -O2 -I. -c common.c
  * $Id$ */
 
-#include "rlb.h"
+#include <rlb.h>
 
 struct addrinfo * rlb_get_addrinfo(char *h, char *p)
 {
