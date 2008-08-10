@@ -1,4 +1,4 @@
-/* rlb.h Jason Armstrong <ja@riverdrums.com> © 2006-2007 RIVERDRUMS
+/* rlb.h Jason Armstrong <ja@riverdrums.com> © 2006-2008 RIVERDRUMS
  * $Id$ */
 
 #ifndef _RLB_H_
@@ -26,7 +26,7 @@
 #include <dlfcn.h>
 #endif
 
-#define RLB_VERSION   "0.8"
+#define RLB_VERSION   "0.9"
 #define RLB_TIMEOUT   30        /**< Socket timeout and dead server check interval */
 #define RLB_BUFSIZE   4096      /**< Default buffer size and number of clients to track */
 
@@ -79,36 +79,38 @@ struct connection {
 
 #ifdef RLB_SO
 struct filter {
-  char name[64];                                /**< Reporting purposes only */
-  void *h;                                      /**< Handle to shared object */
-  void *userdata;                               /**< Persistent while rlb is running */
-  int  (*fl)(struct connection *, int, void *); /**< Filter after read    rlb_filter() */
-  void (*cl)(struct connection *, void *);      /**< Connection close     rlb_close() */
-  void (*gs)(struct connection *, void *);      /**< Custom choose server rlb_get_server() */
-  int  (*in)(struct cfg *, void **);            /**< Global init          rlb_init() */
-  void (*fr)(struct cfg *, void **);            /**< Global shutdown      rlb_cleanup() */
+  char name[64];                                  /**< Reporting purposes only */
+  void *h;                                        /**< Handle to shared object */
+  void *userdata;                                 /**< Persistent while rlb is running */
+  int  (*fl)(struct connection *, int, void *);   /**< Filter after read    rlb_filter() */
+  void (*cl)(struct connection *, void *);        /**< Connection close     rlb_close() */
+  void (*gs)(struct connection *, void *);        /**< Custom choose server rlb_get_server() */
+  int  (*ns)(struct connection *, void *);        /**< No server found      rlb_no_server() */
+  int  (*in)(struct cfg *, void **);              /**< Global init          rlb_init() */
+  void (*fr)(struct cfg *, void **);              /**< Global shutdown      rlb_cleanup() */
+  void (*el)(struct cfg *, struct connection *, int, char *, void *);   /**< Error Logger         rlb_error() */
 };
 #endif
 
 struct cfg {
   int bufsize, num, daemon, fd, check, max; 
   int si, cs, ci, rr, stubborn, delay;
-  struct connection *conn;                      /**< Array of 'max' connections */
-  struct buffer *buffers;                       /**< Array of 'max' buffers */
-  struct server *servers;                       /**< Array of 'si' servers */
-  struct client *clients;                       /**< Array of 'ci' clients */
-  char *jail, *user;                            /**< chroot() jail / Run as 'user' */
-  struct timeval to;                            /**< Timeout value (seconds) */
-  char host[64], port[8];                       /**< Listen host and port */
-  struct sockaddr oaddr;                        /**< Bind to this address on 'connect()' */
-  size_t olen;                                  /**< Outbound address size */
+  struct connection *conn;                        /**< Array of 'max' connections */
+  struct buffer *buffers;                         /**< Array of 'max' buffers */
+  struct server *servers;                         /**< Array of 'si' servers */
+  struct client *clients;                         /**< Array of 'ci' clients */
+  char *jail, *user;                              /**< chroot() jail / Run as 'user' */
+  struct timeval to;                              /**< Timeout value (seconds) */
+  char host[64], port[8];                         /**< Listen host and port */
+  struct sockaddr oaddr;                          /**< Bind to this address on 'connect()' */
+  size_t olen;                                    /**< Outbound address size */
 #ifdef RLB_SO
-  struct filter *filters;                       /**< Array of 'fi' filters */
-  int fi, ini, fri, gsi, fli, cli, cf;          /**< Filter counters */
+  struct filter *filters;                         /**< Array of 'fi' filters */
+  int fi, ini, fri, gsi, nsi, fli, cli, eli, cf;  /**< Filter counters */
 # ifdef RLB_CONTROL
-  char kh[64], kp[8];                           /**< Control host and port */
-  int kfd;                                      /**< Control socket */
-  struct timeval kto;                           /**< Control socket timeout */
+  char kh[64], kp[8];                             /**< Control host and port */
+  int kfd;                                        /**< Control socket */
+  struct timeval kto;                             /**< Control socket timeout */
 # endif
 #endif
 };
