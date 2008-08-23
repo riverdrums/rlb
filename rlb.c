@@ -467,7 +467,7 @@ static int _startup(struct cfg *cfg)
 
   if (cfg->user)  if ( !(pw = getpwnam(cfg->user)) )                    return -1;
   if (cfg->jail)  if (chdir(cfg->jail) < 0 || chroot(cfg->jail) < 0)    return -1;
-  if (pw)         if (setgid(pw->pw_gid < 0) || setuid(pw->pw_uid) < 0) return -1;
+  if (pw)         if (setgid(pw->pw_gid) < 0 || setuid(pw->pw_uid) < 0) return -1;
 
   for (i = 0; i < cfg->max; i++) {
     cfg->conn[i].cfg   = cfg;
