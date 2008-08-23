@@ -23,20 +23,20 @@ static FILE *_rlb_fp = NULL;
 #define ER1   "Read error (no buffer)"
 #define ER2   "Read error (SERVER: no client)"
 #define ER3   "Read error"
-#define ER4   "Filter error on read"
+#define EF1   "Filter returned error"
 #define EW1   "Write error (no buffer)"
 #define EW2   "Write error (no data)"
 #define EW3   "Write error"
-#define EG1   "Server from filter unavailable"
+#define EG1   "Filter server unavailable"
 #define EG2   "Stubborn server unavailable"
 #define EG3   "No server available"
 #define ES1   "Socket error"
-#define ES2   "Maximum socket number reached"
+#define ES2   "Max limit (SERVER)"
 #define ES3   "Connect error: SERVER now DEAD"
 #define EC1   "Accept error"
-#define EC2   "Max limit on accept"
-#define EC3   "Sockopt() error"
-#define EB1   "File descriptor out of range"
+#define EC2   "Max limit on accept (CLIENT)"
+#define EC3   "Sockopt error"
+#define EB1   "Buffer index out of range"
 #define EB2   "No buffer available"
 #define EIN   "Filter initialisation failed"
 
@@ -165,7 +165,7 @@ static void _read(struct connection *c)
     int rc = 0;
     for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
       struct filter *fl = &cfg->filters[cfg->cf];
-      if (fl->fl) if ( (rc = fl->fl(c, r, fl->userdata)) < 0) { ERR1(ER4); return _close(cfg, c); }
+      if (fl->fl) if ( (rc = fl->fl(c, r, fl->userdata)) < 0) { ERR1(EF1); return _close(cfg, c); }
 # ifdef RLB_CONTROL
       if (c->scope == RLB_CTRL) {
         if (rc > 1 && rc - 2 < cfg->fi) {
@@ -490,7 +490,7 @@ static int _startup(struct cfg *cfg)
   }
 # ifdef RLB_CONTROL
   RLOG("CONTROL port %d", cfg->kfd);
-  if (cfg->kfd >= 0) if (listen(cfg->kfd, SOMAXCONN) < 0) return -1; /* XXX Maybe limit the control port queue (5-10) */
+  if (cfg->kfd >= 0) if (listen(cfg->kfd, cfg->kmax ? cfg->kmax : SOMAXCONN) < 0) return -1;
   if (!cfg->kto.tv_sec) cfg->kto.tv_sec = RLB_TIMEOUT * 4;
 # endif
 #endif
@@ -500,8 +500,8 @@ static int _startup(struct cfg *cfg)
 static int _error(struct cfg *cfg, struct connection *c, int line, char *s)
 {
 #ifdef RLB_SO
-  if (!cfg) { if (c) cfg = c->cfg; else return -1; }
-  if (cfg->eli) {
+  if (!cfg) if (c) cfg = c->cfg;
+  if (cfg && cfg->eli) {
     for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
       struct filter *fl = &cfg->filters[cfg->cf];
       if (fl->el) fl->el(cfg, c, line, s, fl->userdata);
@@ -514,11 +514,11 @@ static int _error(struct cfg *cfg, struct connection *c, int line, char *s)
 static void _no_server(struct connection *c)
 {
 #ifdef RLB_SO
-  if (c->cfg->nsi) {
-    struct cfg *cfg = c->cfg;
+  struct cfg *cfg = c->cfg;
+  if (cfg && cfg->nsi) {
     for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
       struct filter *fl = &cfg->filters[cfg->cf];
-      if (fl->ns) if (fl->ns(c, fl->userdata)) return _event_set(c, EV_WRITE);
+      if (fl->ns) if (fl->ns(c, fl->userdata) > 0) return _event_set(c, EV_WRITE);
     }
   }
 #endif
@@ -639,6 +639,7 @@ static int _cmdline(struct cfg *cfg, int ac, char *av[])
       case 't': cfg->to.tv_sec  = atoi(av[i]);                  break;
 #ifdef RLB_SO
 # ifdef RLB_CONTROL
+      case 'M': cfg->kmax       = atoi(av[i]);                  break;
       case 'T': cfg->kto.tv_sec = atoi(av[i]);                  break;
       case 'k': snprintf(cfg->kp, sizeof(cfg->kp), av[i]);      break;
       case 'K': snprintf(cfg->kh, sizeof(cfg->kh), av[i]);      break;
@@ -659,14 +660,14 @@ static void _usage(void)
 {
   fprintf(stderr, "\nrlb %s Copyright © 2006-2008 RIVERDRUMS\n\n", RLB_VERSION);
   fprintf(stderr, "usage: rlb -p port -h host[:service:max] [-h host[:service:max] ...]\n"
-                  "          [-b address] [-B address] [-m max] [-t timeout] [-c check interval]\n"
-                  "          [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients to track]\n"
+                  "          [-b <address>] [-B <address>] [-m <max>] [-t <timeout>] [-c <check interval>]\n"
+                  "          [-s <bufsize>] [-n <servers>] [-u <user>] [-j <jail>] [-l <clients to track>]\n"
                   "          [-r (round-robin)] [-S (stubborn)] [-d (delay)] [-f (foreground)]\n");
 #ifdef RLB_SO
 # ifdef RLB_CONTROL
-  fprintf(stderr, "          [-k control port] [-K control address] [-T control timeout]\n");
+  fprintf(stderr, " control: [-k <port>] [-K <address>] [-T <timeout>] [-M <max>]\n");
 # endif
-  fprintf(stderr, "          [-o shared object [-o shared object] ...]\n");
+  fprintf(stderr, " filters: [-o <shared object> [-o <shared object>] ...]\n");
 #endif
   fprintf(stderr, "\n"); exit(EXIT_SUCCESS);
 }

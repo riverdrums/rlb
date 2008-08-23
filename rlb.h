@@ -111,6 +111,7 @@ struct cfg {
   char kh[64], kp[8];                             /**< Control host and port */
   int kfd;                                        /**< Control socket */
   struct timeval kto;                             /**< Control socket timeout */
+  int kmax;                                       /**< Maximum number of control connections */
 # endif
 #endif
 };

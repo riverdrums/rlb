@@ -29,6 +29,6 @@ clean:
 	@rm -f $(TARGETS) $(OBJS)
 
 .c.o:
-	@echo "  CC $<"
+	@echo " CC $<"
 	@$(CC) $(OPT) $<
 

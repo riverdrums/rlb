@@ -1,5 +1,4 @@
-/* common.c Jason Armstrong <ja@riverdrums.com> © 2006-2007 RIVERDRUMS
- * $ gcc -Wall -O2 -I. -c common.c
+/* common.c Jason Armstrong <ja@riverdrums.com> © 2006-2008 RIVERDRUMS
  * $Id$ */
 
 #include <rlb.h>

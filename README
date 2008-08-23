@@ -1,7 +1,7 @@
 $Id$
 
-RLB v0.8  Jason Armstrong <ja@riverdrums.com>
-Copyright (c) 2006-2007 Riverdrums
+RLB v0.9  Jason Armstrong <ja@riverdrums.com>
+Copyright (c) 2006-2008 Riverdrums
 http://rlb.sourceforge.net
 
 LICENSE
@@ -52,7 +52,7 @@ COMPILING
     $ gcc -Wall -O2 -o rlb rlb.o common.o -levent -ldl
 
   c) Control port interface support
-    To use the new control port interface, define both RLB_SO and
+    To use the control port interface, define both RLB_SO and
     RLB_CONTROL:
 
     $ gcc -DRLB_SO -DRLB_CONTROL -Wall -O2 -c rlb.c
@@ -64,17 +64,18 @@ COMPILING
 
 3. Optionally, compile a shared object filter:
 
-  To compile the included rlb_http_filter shared object:
+  To compile the included rlb_http_filter shared object in the 'filters'
+  sub-directory:
 
-  $ gcc -DRLB_SO -Wall -O2 -I. -fPIC -shared \
+  $ gcc -DRLB_SO -Wall -O2 -I.. -fPIC -shared \
       -o rlb_http_filter.so rlb_http_filter.c
 
   To compile your own filter from a filter.c source file:
-  $ gcc -DRLB_SO -Wall -O2 -I. -fPIC -shared \
+  $ gcc -DRLB_SO -Wall -O2 -I.. -fPIC -shared \
       -o filter.so filter.c
 
-  To use the control port interface:
-  $ gcc -DRLB_SO -DRLB_CONTROL -Wall -O2 -I. -fPIC -shared \
+  To use a filter on the control port interface:
+  $ gcc -DRLB_SO -DRLB_CONTROL -Wall -O2 -I.. -fPIC -shared \
       -o control.so control.c
 
   To use your own filter:
@@ -86,11 +87,11 @@ Build options for other architectures: please send to the author.
 USAGE
 
 $ rlb -p port -h host[:service:max] [-h host[:service:max] ...]
-     [-b address] [-B address] [-m max] [-t timeout] [-c check interval]
-     [-s bufsize] [-n servers] [-u user] [-j jail] [-l clients to track]
+     [-b <address>] [-B <address>] [-m <max>] [-t <timeout>] [-c <check interval>]
+     [-s <bufsize>] [-n <servers>] [-u <user>] [-j <jail>] [-l <clients to track>]
      [-r (round-robin)] [-S (stubborn)] [-d (delay)] [-f (foreground)]
-     [-k control port] [-K control address] [-T control timeout]
-     [-o shared object [-o shared object] ...]
+ control: [-k <port>] [-K <address>] [-T <timeout>] [-M <max>]
+ filters: [-o <shared object> [-o <shared object>] ...]
 
 
 OPTIONS
@@ -138,6 +139,7 @@ OPTIONS
   -f        Run in the foreground (cancels the -n option)
   -k  port  Listen on this port for control connections.
   -K  addr  Bind to this interface for the control port.
+  -M  num   Number of simultaneous control connections to accept.
   -T  secs  Control port timeout. Default value is 30 seconds.
   -o  so    Load the specified shared object content filter. This option
             can be specified multiple times. Filters are called in the
@@ -177,6 +179,9 @@ they are given on the command line.
 
 Five API functions are defined. None are required, and they are only
 called if they are found in the shared object.
+
+Filters are useful for inspecting, logging and possibly altering data in
+both directions.
 
 An example http filter program is included. It rewrites 'Host' and
 'Referer' fields from the client to the backend server (probably not
@@ -252,7 +257,7 @@ void rlb_cleanup(struct cfg *cfg, void **data) {
   something like this:
 
 int rlb_filter(struct connection *c, int r, void *data) {
-  *(c->rb->b + c->rb->pos + c->rb->len) = 0;
+  *(c->rb->b + c->rb->pos + c->rb->len) = '\0';
 }
 
   And you are guaranteed that you won't be overrunning the end of the
@@ -297,14 +302,15 @@ int rlb_filter(struct connection *c, int r, void *data) {
      as a data container, and should be freed in the corresponding call
      to rlb_close(). This is different to the variable passed to the
      rlb_filter() function, 'data', which is the 'global' data pointer
-     (ie the one assigned by rlb_init()). If you assigned c->userdata,
-     you should free the applicable resources in rlb_close(). You can
-     use the connection userdata variable (c->userdata) to keep track of
-     information for the length of a connection. See the example
-     rlb_http_filter.c code, where it is used to store HTTP request
-     information. Because there is a per-filter userdata variable for
-     each connection, you should use the following format to get the
-     specific variable for your filter: c->userdata[c->cfg->cf]
+     (ie the one assigned by rlb_init()), and is available across the
+     entire filter. If you assigned c->userdata, you should free the
+     applicable resources in rlb_close(). You can use the connection
+     userdata variable (c->userdata) to keep track of information for
+     the length of a connection. See the example rlb_http_filter.c code,
+     where it is used to store HTTP request information. Because there
+     is a per-filter userdata variable for each connection, you should
+     use the following format to get the specific variable for your
+     filter: c->userdata[c->cfg->cf]
 
 4. void rlb_close(struct connection *, void *);
 
@@ -331,8 +337,9 @@ int rlb_filter(struct connection *c, int r, void *data) {
   connects to your specified server. You need to assign the variables in
   the server structure, such as the addrinfo pointer, as well as the
   'status' variable to indicate that the server is alive. See the
-  example rlb_http_filter.c file.
-
+  example rlb_http_filter.c file, which reconnects to a separate 'image'
+  server if the request contains a certain string.
+ 
   You can also set the c->reconnect variable to 1. This will tell rlb to
   renegotiate a server.
 
@@ -342,6 +349,78 @@ int rlb_filter(struct connection *c, int r, void *data) {
   that you know more data will arrive), otherwise no further events will
   be triggered and a timeout will be reached. This option is
   experimental at the moment and may change.
+
+6.  void rlb_error(struct cfg *, struct connection *, int , char *, void *);
+
+  At various points in the RLB process, an error condition can be
+  triggered, and the code could return from a function silently. This
+  function is designed to help track down where errors are occurring in
+  the code.
+
+  If you provide the rlb_error() function, then every time an error is
+  triggered in the rlb core engine, your function will be called with
+  the following parameters:
+
+  - The global configuration data structure
+  - The connection structure in operation
+  - The line number in the rlb.c source code
+  - A string that describes the error
+  - The per filter data container pointer
+
+  For example, given the code above in the rlb_init() section, which
+  assigns a FILE * to the data pointer, you could do the following in
+  the error filter:
+
+void rlb_error(struct cfg *cfg, struct connection *c, int line, char *s, void *data) {
+  FILE *fp = data;
+
+  if (fp) {
+    fprintf(fp, "=> RLB %s, line %d\n", RLB_VERSION, line);
+    fprintf(fp, "'%s'\n", s);
+    fprintf(fp, "errno=%d err='%s'\n", errno, strerror(errno));
+    if (c) {
+      char h[64], p[64];
+
+      if (getnameinfo(&c->sa, sizeof(c->sa), 
+                      h, sizeof(h), 
+                      p, sizeof(p), NI_NUMERICHOST | NI_NUMERICSERV)) {
+        *h = *p = '\0';
+      }
+
+      fprintf(fp, "   scope             %s\n", 
+           c->scope == RLB_SERVER ? "SERVER" : c->scope == RLB_CLIENT ? "CLIENT" : "*");
+      fprintf(fp, "   file descriptor   %d\n", c->fd);
+      fprintf(fp, "   other descriptor  %d\n", c->od);
+      if (c->rb) fprintf(fp, "   read buffer       pos=%d len=%d size=%d\n", c->rb->pos, c->rb->len, c->rb->bs);
+      if (c->wb) fprintf(fp, "   write buffer      pos=%d len=%d size=%d\n", c->wb->pos, c->wb->len, c->wb->bs);
+      fprintf(fp, "   bytes read        %u\n", c->nr);
+      fprintf(fp, "   bytes written     %u\n", c->nw);
+      if (*h && *p) fprintf(fp, "   address and port  %s:%s\n", h, p);
+    }
+  }
+}
+
+  See the rlb_error.c file in the filters directory for more details.
+
+7.  int rlb_no_server(struct connection *, void *);
+
+  This function is written for the case when a backend server is not
+  available. The connection structure being passed to it will be the one
+  for the client that made the connection. There may be read data if the
+  server is running with the delay flag set. 
+
+  It can be used to send a reply back to the client by writing data into
+  the read buffer, and assigning the write buffer to point to that. Then
+  you should return 1 from this function, and the rlb engine will know
+  what to do.
+
+  You can also use it to log any data that has been read for later
+  processing or perusal.
+
+  See the rlb_no_server.c file in the filters sub-directory for an
+  example. This is meant to be used when RLB is running in front of a
+  HTTP cluster, and will return the error code 503 if there are no
+  servers available.
 
 
 CONTROL INTERFACE
