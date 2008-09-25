@@ -181,7 +181,7 @@ static void _read(struct connection *c)
   if (c->scope == RLB_CTRL) { event_add(&c->ev, &cfg->kto); return; }
 #endif
 #endif
-  if (cfg->delay && c->nr - r == 0 && c->scope == RLB_CLIENT) {
+  if (cfg->delay && !c->nowrite && c->od < 0 && c->scope == RLB_CLIENT) {
 #ifdef RLB_SO
     if (cfg->gsi) {
       for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
