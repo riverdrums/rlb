@@ -191,7 +191,9 @@ static void _read(struct connection *c)
     }
 #endif
     if (_server(c, EV_WRITE) < 0) return _no_server(c); /* XXX ERROR */
-  } else _event_set(co, EV_WRITE);
+  } else { 
+    if (c->nowrite) _event_set(c, EV_READ); else _event_set(co, EV_WRITE); 
+  }
   event_add(&c->ev, &cfg->to);
 }
 
