@@ -80,30 +80,32 @@ char * rlb_strnstr(char *str, char *find, int n)
 int rlb_str_insert(struct connection *c, char *start, char *end, char *insert, int len)
 {
   int rest, need;
-  struct buffer *bf;
+  struct buffer *b;
 
   if (strncmp(start, insert, len) == 0 && end - start == len) return 0;
-  if ( !(bf = c->rb) || end < start) return -1;
-  if (end < bf->b || start < bf->b || end > bf->b + bf->bs || start > bf->b + bf->bs) return -1;
+  if ( !(b = c->rb) || end < start) return -1;
+  if (end < b->b || start < b->b || end > b->b + b->bs || start > b->b + b->bs) return -1;
 
-  rest = bf->len - ((end - start) - len);
-  need = bf->pos + rest;
+  rest = b->len - ((end - start) - len);
+  need = b->pos + rest;
 
-  if (need > bf->bs) {
-    char *b = bf->b;
-    int startpos = start - b, endpos = end - b;
-    if ( (b = realloc(bf->b, (need + 1) * sizeof(*b))) ) {
-      bf->bs = need; bf->b = b;
-      start = b + startpos;
-      end   = b + endpos;
+  if (need >= b->bs) need += b->bs - b->pos + b->len;
+
+  if (need > b->bs) {
+    char *buf = b->b;
+    int startpos = start - buf, endpos = end - buf;
+    if ( (buf = realloc(b->b, (need + 1) * sizeof(*buf))) ) {
+      b->bs = need; b->b = buf;
+      start = buf + startpos;
+      end   = buf + endpos;
     } else return -1;
   }
 
   if ( (end - start) != len) {
-    memmove(start + len, end, bf->len - (end - (bf->b + bf->pos)));
+    memmove(start + len, end, b->len - (end - (b->b + b->pos)));
   }
   memcpy(start, insert, len);
-  bf->len -= (end - start) - len;
+  b->len -= (end - start) - len;
 
   return 0;
 }
