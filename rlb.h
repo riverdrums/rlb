@@ -66,10 +66,10 @@ struct connection {
   struct cfg *cfg;          /**< Pointer to global configuration structure */
   rlb_scope scope;          /**< CLIENT=outside connection SERVER=backend server */
   struct sockaddr sa;       /**< Accepted client address */
+  int nowrite;              /**< Don't write data when this is set (by a filter) */
 #ifdef RLB_SO
   struct server *so_server; /**< Pointer to our own defined server to connect to */
   int reconnect;            /**< Reconnect to another server during a connection */
-  int nowrite;              /**< Don't write data when this is set */
   void **userdata;          /**< Persistent across a connection (one for each filter) */
 # ifdef RLB_CONTROL
   char fn[256];             /**< Shared object name for rlb engine to load */

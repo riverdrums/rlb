@@ -155,8 +155,7 @@ static void _read(struct connection *c)
   do { r = read(c->fd, b->b + b->pos + b->len, b->bs - b->len - b->pos); } while (r == -1 && errno == EINTR);
   RLOG(" R fd=%-4d od=%-4d %s %4d (%d:%d %d)", c->fd, c->od, SCOPE, r, b->pos, b->len, b->bs);
   if (r <= 0) {
-    if (r < 0) ERR1(ER3);
-    if (r < 0 && c->scope == RLB_SERVER) c->server->status = RLB_DEAD;
+    if (r < 0) { ERR1(ER3); if (c->scope == RLB_SERVER) c->server->status = RLB_DEAD; }
     if (co && b->len == 0) _close(cfg, co); return _close(cfg, c);
   }
   c->nr += r; b->len += r;
@@ -280,7 +279,7 @@ static void _close(struct cfg *cfg, struct connection *c)
   if (c->od >= 0) { co = &cfg->conn[c->od]; co->od = -1; co->rb = NULL; }
   if (c->wb) { c->wb->taken = 0; c->wb->pos = c->wb->len = 0; }
   if (c->rb && (!c->rb->len || c->od < 0)) { if (co) co->wb = NULL; c->rb->taken = c->rb->pos = c->rb->len = 0; }
-  c->fd = c->od = rlb_closefd(c->fd); c->wb = c->rb = NULL; c->nr = c->nw = 0; 
+  c->fd = c->od = rlb_closefd(c->fd); c->wb = c->rb = NULL; c->nr = c->nw = c->nowrite = 0; 
   if (c->scope == RLB_SERVER) (c->server->num)--; 
   c->server = NULL; c->scope = RLB_NONE;
   if (c->client) { c->client->last = time(NULL); c->client = NULL; }
@@ -350,7 +349,7 @@ static int _server(struct connection *c, short event)
 #ifdef RLB_DEBUG
   { char h[64], p[8]; struct sockaddr *sa = c->server->ai->ai_addr;
     if (getnameinfo(sa, sizeof(*sa), h, 64, p, 8, NI_NUMERICHOST | NI_NUMERICSERV)) *h = *p = '\0';
-    RLOG("O: fd=%-4d od=%-4d             %s:%s %p n=%d", fd, c->fd, h, p, c->server, c->server->num);
+    RLOG("O: fd=%-4d od=%-4d                 %s:%s %p n=%d", fd, c->fd, h, p, c->server, c->server->num);
   }
 #endif
   cn = &cfg->conn[fd]; cn->scope = RLB_SERVER;
