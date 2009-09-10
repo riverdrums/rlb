@@ -1,7 +1,7 @@
 $Id$
 
 RLB v0.9  Jason Armstrong <ja@riverdrums.com>
-Copyright (c) 2006-2008 Riverdrums
+Copyright (c) 2006-2009 Riverdrums
 http://rlb.sourceforge.net
 
 LICENSE
@@ -286,8 +286,7 @@ int rlb_filter(struct connection *c, int r, void *data) {
        struct connection *other = &c->cfg->conn[c->od];
      }
      It may not always be defined (eg if -d is specified, the first call
-     to the filter will not have have a corresponding server
-     connection).
+     to the filter will not have a corresponding server connection).
   g) The buffer size is stored in the variable c->rb->bs. If you
      reallocate the data buffer (c->rb->b), you need to reassign this
      variable too.
@@ -439,7 +438,7 @@ connections in the following ways:
      the write buffer to it (and take the responsibility of managing
      its resources), or use the read buffer as a write buffer itself
      (ie c->wb = c->rb), and overwrite what was read from the client.
-  3. If a content filter 'rlb_filter()' returns > 0, then it is assumed
+  3. If a content filter 'rlb_filter()' returns 1, then it is assumed
      that there is data to be written back to the client, and a 'write'
      event notification is set on the file descriptor.
   4. If the content filter rlb_filter() returns > 1, then the rlb engine
