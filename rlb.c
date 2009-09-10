@@ -1,4 +1,4 @@
-/* rlb.c Jason Armstrong <ja@riverdrums.com> © 2006-2008 RIVERDRUMS
+/* rlb.c Jason Armstrong <ja@riverdrums.com> © 2006-2009 RIVERDRUMS
  * $Id$ */
 
 #include "rlb.h"
@@ -67,6 +67,15 @@ static void _sig(int signo);
 static int _load_so(struct cfg *cfg, const char *path, int init);
 #endif
 
+#ifdef __VOS__
+/* Declare API functions here directly */
+int   rlb_init(struct cfg *cfg, void **data);
+void  rlb_cleanup(struct cfg *cfg, void **data);
+int   rlb_filter(struct connection *c, int r, void *data);
+void  rlb_close(struct connection *c, void *data);
+void  rlb_error(struct cfg *cfg, struct connection *c, int line, char *s, void *data);
+#endif
+
 int main(int argc, char *argv[]) {
   struct event ev;
 #if defined(RLB_SO) && defined(RLB_CONTROL)
@@ -124,7 +133,9 @@ static void _cleanup(struct cfg *cfg)
   for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
     struct filter *fl = &cfg->filters[cfg->cf];
     if (fl->fr) fl->fr(cfg, &(fl->userdata));
+#ifndef __VOS__
     if (fl->h) dlclose(fl->h);
+#endif
   }
   if (cfg->filters) { free(cfg->filters); cfg->filters = NULL; } cfg->fi  = 0;
 #endif
@@ -165,7 +176,7 @@ static void _read(struct connection *c)
     for (cfg->cf = 0; cfg->cf < cfg->fi; cfg->cf++) {
       struct filter *fl = &cfg->filters[cfg->cf];
       if (fl->fl) if ( (rc = fl->fl(c, r, fl->userdata)) < 0) { ERR1(EF1); return _close(cfg, c); }
-# ifdef RLB_CONTROL
+# if defined(RLB_CONTROL) && ! defined(__VOS__)
       if (c->scope == RLB_CTRL) {
         if (rc > 1 && rc - 2 < cfg->fi) {
           fl = &cfg->filters[rc - 2];
@@ -176,9 +187,9 @@ static void _read(struct connection *c)
       if (rc) return _event_set(c, EV_WRITE);
     }
   }
-#if defined(RLB_SO) && defined(RLB_CONTROL)
+# if defined(RLB_SO) && defined(RLB_CONTROL)
   if (c->scope == RLB_CTRL) { event_add(&c->ev, &cfg->kto); return; }
-#endif
+# endif
 #endif
   if (cfg->delay && !c->nowrite && c->od < 0 && c->scope == RLB_CLIENT) {
 #ifdef RLB_SO
@@ -263,9 +274,10 @@ static void _event_set(struct connection *c, short event)
 static void _close(struct cfg *cfg, struct connection *c)
 {
   struct connection *co = NULL;
+  struct buffer *rb = c->rb;
 #ifdef RLB_DEBUG
   char b[16]; 
-  if (c->rb) snprintf(b, 16, "(%d:%d)", c->rb->pos, c->rb->len); else snprintf(b, 16, "(*:*)");
+  if (rb) snprintf(b, 16, "(%d:%d)", rb->pos, rb->len); else snprintf(b, 16, "(*:*)");
   if (c->fd >= 0) RLOG("X: fd=%-4d od=%-4d %s    * %s (r=%u w=%u)", c->fd, c->od, SCOPE, b, c->nr, c->nw);
 #endif
 #ifdef RLB_SO
@@ -276,10 +288,10 @@ static void _close(struct cfg *cfg, struct connection *c)
     }
   }
 #endif
-  if (c->od >= 0) { co = &cfg->conn[c->od]; co->od = -1; co->rb = NULL; }
-  if (c->wb) { c->wb->taken = 0; c->wb->pos = c->wb->len = 0; }
-  if (c->rb && (!c->rb->len || c->od < 0)) { if (co) co->wb = NULL; c->rb->taken = c->rb->pos = c->rb->len = 0; }
-  c->fd = c->od = rlb_closefd(c->fd); c->wb = c->rb = NULL; c->nr = c->nw = c->nowrite = 0; 
+  if (c->od >= 0) { co = &cfg->conn[c->od]; co->od = -1; }
+  if (c->wb && !co) { c->wb->taken = c->wb->pos = c->wb->len = 0; }
+  if (rb && (!rb->len || !co)) { if (co) co->wb = NULL; rb->taken = rb->pos = rb->len = 0; }
+  c->fd = c->od = rlb_closefd(c->fd); c->wb = rb = NULL; c->nr = c->nw = c->nowrite = 0; 
   if (c->scope == RLB_SERVER) (c->server->num)--; 
   c->server = NULL; c->scope = RLB_NONE;
   if (c->client) { c->client->last = time(NULL); c->client = NULL; }
@@ -349,7 +361,7 @@ static int _server(struct connection *c, short event)
 #ifdef RLB_DEBUG
   { char h[64], p[8]; struct sockaddr *sa = c->server->ai->ai_addr;
     if (getnameinfo(sa, sizeof(*sa), h, 64, p, 8, NI_NUMERICHOST | NI_NUMERICSERV)) *h = *p = '\0';
-    RLOG("O: fd=%-4d od=%-4d                 %s:%s %p n=%d", fd, c->fd, h, p, c->server, c->server->num);
+    RLOG("O: fd=%-4d od=%-4d         %s:%s %p n=%d", fd, c->fd, h, p, c->server, c->server->num);
   }
 #endif
   cn = &cfg->conn[fd]; cn->scope = RLB_SERVER;
@@ -441,6 +453,7 @@ static int _startup(struct cfg *cfg)
   getrlimit(RLIMIT_NOFILE, &rl);
   rl.rlim_cur = rl.rlim_max;
   setrlimit(RLIMIT_NOFILE, &rl);
+
   if (cfg->max == 0)      cfg->max = rl.rlim_cur;
   else if (cfg->max < 8)  cfg->max = 8;
 
@@ -453,6 +466,9 @@ static int _startup(struct cfg *cfg)
   if ( !(cfg->conn    = calloc(cfg->max, sizeof(*cfg->conn))) )     return -1;
   for (i = 3; i < cfg->max; i++) rlb_closefd(i); cfg->cs = cfg->si - 1;
 
+#ifdef __VOS__
+  _load_so(cfg, "VOS", 0);
+#else
   if (cfg->daemon) {
     rlb_closefd(0); rlb_closefd(1); rlb_closefd(2);
     if ( (rc = _bind(cfg)) < 0) return rc;
@@ -464,10 +480,14 @@ static int _startup(struct cfg *cfg)
       if (getpid() == ppid) _exit(0);
       if ( (rc = _bind_kp(cfg, i)) < 0) return rc;
     } else if ( (rc = _bind_kp(cfg, 0)) < 0) return rc;
-  } else if ( (rc = _bind(cfg)) < 0 || (rc = _bind_kp(cfg, 0)) < 0) return rc;
+  } else 
+#endif
+    if ( (rc = _bind(cfg)) < 0 || (rc = _bind_kp(cfg, 0)) < 0) return rc;
 
   if (cfg->user)  if ( !(pw = getpwnam(cfg->user)) )                    return -1;
+#ifndef __VOS__
   if (cfg->jail)  if (chdir(cfg->jail) < 0 || chroot(cfg->jail) < 0)    return -1;
+#endif
   if (pw)         if (setgid(pw->pw_gid) < 0 || setuid(pw->pw_uid) < 0) return -1;
 
   for (i = 0; i < cfg->max; i++) {
@@ -587,8 +607,12 @@ static int _lookup_oaddr(struct cfg *cfg, char *outb)
 static int _load_so(struct cfg *cfg, const char *path, int init)
 {
   struct filter *fl = NULL, *f = NULL;
-  char *p = strrchr(path, '/');
   int i;
+#ifndef __VOS__
+  char *p = strrchr(path, '/');
+#else
+  if (cfg->fi) return 0;
+#endif
   for (i = 0; i < cfg->fi; i++, f = NULL) if (!cfg->filters[i].h) { f = &cfg->filters[i]; break; }
   if (!f) {
     if ( !(fl = realloc(cfg->filters, (cfg->fi + 1) * sizeof(*fl))) ) return ERR3("");
@@ -602,6 +626,16 @@ static int _load_so(struct cfg *cfg, const char *path, int init)
     }
     cfg->fi++;
   }
+#ifdef __VOS__    /* Point to the functions directly */
+  snprintf(f->name, sizeof(f->name), "VOS");
+  f->in = rlb_init;        cfg->ini++;
+  f->fr = rlb_cleanup;     cfg->fri++;
+  f->fl = rlb_filter;      cfg->fli++;
+  f->cl = rlb_close;       cfg->cli++;
+  f->el = rlb_error;       cfg->eli++;
+/*f->gs = rlb_get_server;  cfg->gsi++;
+  f->ns = rlb_no_server;   cfg->nsi++; */
+#else
   dlerror();
   if ( !(f->h = dlopen(path, RTLD_GLOBAL | RTLD_NOW)) ) { fprintf(stderr, dlerror()); return ERR3(""); }
   snprintf(f->name, sizeof(f->name), "%s", p ? p + 1 : path);
@@ -613,6 +647,7 @@ static int _load_so(struct cfg *cfg, const char *path, int init)
   if ( (f->ns = dlsym(f->h, "rlb_no_server")) )   cfg->nsi++;
   if ( (f->el = dlsym(f->h, "rlb_error")) )       cfg->eli++;
   if (init && f->in) if (f->in(cfg, &f->userdata) < 0) return ERR3(EIN);
+#endif
   return 0;
 }
 #endif
@@ -654,12 +689,12 @@ static int _cmdline(struct cfg *cfg, int ac, char *av[])
       default : return -1;
     }
   }
-  return (cfg->si && *cfg->port) ? 0 : -1;
+  return (*cfg->port) ? 0 : -1;
 }
 
 static void _usage(void)
 {
-  fprintf(stderr, "\nrlb %s Copyright © 2006-2008 RIVERDRUMS\n\n", RLB_VERSION);
+  fprintf(stderr, "\nrlb %s Copyright © 2006-2009 RIVERDRUMS\n\n", RLB_VERSION);
   fprintf(stderr, "usage: rlb -p port -h host[:service:max] [-h host[:service:max] ...]\n"
                   "          [-b <address>] [-B <address>] [-m <max>] [-t <timeout>] [-c <check interval>]\n"
                   "          [-s <bufsize>] [-n <servers>] [-u <user>] [-j <jail>] [-l <clients to track>]\n"
@@ -668,7 +703,9 @@ static void _usage(void)
 # ifdef RLB_CONTROL
   fprintf(stderr, " control: [-k <port>] [-K <address>] [-T <timeout>] [-M <max>]\n");
 # endif
+# ifndef __VOS__
   fprintf(stderr, " filters: [-o <shared object> [-o <shared object>] ...]\n");
+# endif
 #endif
   fprintf(stderr, "\n"); exit(EXIT_SUCCESS);
 }
