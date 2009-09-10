@@ -1,4 +1,4 @@
-/* common.c Jason Armstrong <ja@riverdrums.com> © 2006-2008 RIVERDRUMS
+/* common.c Jason Armstrong <ja@riverdrums.com> © 2006-2009 RIVERDRUMS
  * $Id$ */
 
 #include <rlb.h>
