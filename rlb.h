@@ -1,28 +1,33 @@
-/* rlb.h Jason Armstrong <ja@riverdrums.com> © 2006-2008 RIVERDRUMS
+ /* rlb.h Jason Armstrong <ja@riverdrums.com> © 2006-2009 RIVERDRUMS
  * $Id$ */
 
 #ifndef _RLB_H_
 #define _RLB_H_
 
+#ifdef __VOS__
+# define _POSIX_C_SOURCE 200112L
+# include "addrinfo.h"
+#endif
+
+#include <sys/types.h>
+#include <signal.h>
 #include <pwd.h>
-#include <time.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <stdio.h>
-#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/time.h>
-#include <sys/types.h>
-#include <arpa/inet.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/resource.h>
 #include <event.h>
 
-#ifdef RLB_SO
+#if defined(RLB_SO) && ! defined(__VOS__)
 #include <dlfcn.h>
 #endif
 
